@@ -3,7 +3,7 @@
 Every failure the service can report is an OrchardError. The message says what
 went wrong; the hint says what to do instead, written for a small model that
 will read it and retry. The MCP layer turns these into tool errors verbatim
-(SPEC section 8.3), so write both as if the agent is the reader.
+(SPEC section 4.2), so write both as if the agent is the reader.
 """
 
 from __future__ import annotations

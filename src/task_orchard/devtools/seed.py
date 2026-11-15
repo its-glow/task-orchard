@@ -171,6 +171,11 @@ class _Seeder:
                 task_id=task.id,
                 completed_at=at,
                 estimate_at_completion=task.estimate_minutes,
+                estimate_source_at_completion=(
+                    task.field_sources.get("estimate_minutes", FieldSource.GUESS.value)
+                    if task.estimate_minutes is not None
+                    else None
+                ),
                 motive_at_completion=motive,
                 **fields,
             )
@@ -214,7 +219,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "Design, build and deploy an observability stack for my application",
         created=z.ago(days=20),
         priority=Priority.HIGH,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.NO,
         deadline=z.ahead(days=21),
         sources={"priority": user, "deadline": user, "motive": guess},
@@ -232,7 +237,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
     z.complete(
         backend,
         z.ago(days=3),
-        Motive.HAVE_TO,
+        Motive.MUST,
         actual_minutes=150,
         felt_drain=Level.HIGH,
         felt_activation=Level.LOW,
@@ -265,7 +270,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "Ship release 2.4",
         created=z.ago(days=10),
         priority=Priority.CRITICAL,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.NO,
         deadline=z.ahead(hours=20),
         deadline_firmness=Firmness.HARD,
@@ -305,7 +310,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "Renew the signing certificate",
         created=z.ago(days=25),
         priority=Priority.LOW,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=30,
         activation=Level.MEDIUM,
@@ -351,7 +356,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "budget",
         "Get the offsite budget approved",
         created=z.ago(days=8),
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=30,
     )
@@ -359,7 +364,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "offsite",
         "Plan the team offsite",
         created=z.ago(days=8),
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.NO,
     )
     z.block(budget, offsite)
@@ -387,7 +392,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "Call the dentist to book a check-up",
         created=z.ago(days=35),
         priority=Priority.NORMAL,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=10,
         activation=Level.HIGH,
@@ -410,7 +415,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "mechanic",
         "Call the mechanic",
         created=z.ago(days=2),
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=10,
         activation=Level.MEDIUM,
@@ -423,7 +428,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "File taxes",
         created=z.ago(days=50),
         priority=Priority.HIGH,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.NO,
         deadline=z.ahead(days=40),
         deadline_firmness=Firmness.HARD,
@@ -445,7 +450,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "Buy milk",
         created=z.ago(days=8),
         priority=Priority.LOW,
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=15,
         deadline=z.ago(days=6),
@@ -454,7 +459,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "migration_spec",
         "Write the API migration spec",
         created=z.ago(days=45),
-        motive=Motive.HAVE_TO,
+        motive=Motive.MUST,
         achievable=Achievable.YES,
         estimate_minutes=120,
         drain=Level.HIGH,
@@ -463,7 +468,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
     z.complete(
         migration,
         z.ago(days=30),
-        Motive.HAVE_TO,
+        Motive.MUST,
         actual_minutes=260,
         felt_drain=Level.HIGH,
         felt_activation=Level.MEDIUM,
@@ -490,8 +495,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         recur_firmness=Firmness.HARD,
         last_spawned_slot=slots[-1],
         priority=Priority.HIGH,
-        motive=Motive.HAVE_TO,
-        achievable=Achievable.YES,
+        motive=Motive.MUST,
         estimate_minutes=30,
         drain=Level.LOW,
         pattern_id=summary_pattern.id,
@@ -520,7 +524,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
             payload={"recurring_id": summary.id, "occurrence_at": slot.isoformat()},
         )
         instances.append(inst)
-    z.complete(instances[0], slots[0] - timedelta(hours=3), Motive.HAVE_TO, actual_minutes=25)
+    z.complete(instances[0], slots[0] - timedelta(hours=3), Motive.MUST, actual_minutes=25)
     # Week 1 was left open, so when week 3 spawned there were already two live.
     missed_at = slots[3] - LEAD
     instances[1].status = Status.MISSED
@@ -536,7 +540,7 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
     z.complete(
         instances[2],
         slots[3] - timedelta(days=1),
-        Motive.HAVE_TO,
+        Motive.MUST,
         actual_minutes=40,
         reflection="Late. Had to reconstruct the week from memory.",
     )
@@ -582,7 +586,6 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         gap_days=5,
         motive=Motive.SHOULD,
         priority=Priority.NORMAL,
-        achievable=Achievable.YES,
         estimate_minutes=40,
         activation=Level.LOW,
         drain=Level.LOW,
@@ -596,7 +599,6 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         gap_days=2,
         motive=Motive.SHOULD,
         priority=Priority.NORMAL,
-        achievable=Achievable.YES,
         estimate_minutes=45,
         activation=Level.MEDIUM,
         drain=Level.MEDIUM,
@@ -609,7 +611,6 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         cadence="when there's free time",
         motive=Motive.SHOULD,
         priority=Priority.LOW,
-        achievable=Achievable.YES,
         estimate_minutes=30,
         activation=Level.LOW,
         drain=Level.LOW,

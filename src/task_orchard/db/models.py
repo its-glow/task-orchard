@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from task_orchard.core.enums import (
     Achievable,
     EventType,
+    FieldSource,
     Firmness,
     Level,
     Motive,
@@ -162,7 +163,7 @@ class Task(Base):
         sa.ForeignKey("tasks.id", ondelete="RESTRICT"), index=True
     )
 
-    # The task's OWN values. Effective values are derived (SPEC section 5.3).
+    # The task's OWN values. Effective values are derived (SPEC section 5.4).
     priority: Mapped[Priority | None] = mapped_column(IntEnumType(Priority))
     deadline: Mapped[datetime | None] = mapped_column(UTCDateTime)
     deadline_firmness: Mapped[Firmness | None] = mapped_column(
@@ -218,7 +219,7 @@ class Task(Base):
     # Scheduled: the latest slot already handled. Only ever moves forward.
     last_spawned_slot: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Flexible: fallback snooze applied after each completion.
-    gap_days: Mapped[float | None]
+    gap_days: Mapped[int | None]
 
     # --- Scheduled instances only ---
     occurrence_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -286,6 +287,12 @@ class Completion(Base):
     felt_drain: Mapped[Level | None] = mapped_column(IntEnumType(Level))
     reflection: Mapped[str | None] = mapped_column(sa.Text)
     estimate_at_completion: Mapped[int | None]
+    # Where that estimate came from. Pattern ratios use only `guess` and `user`
+    # estimates: `pattern` and `evidence` ones were derived from past completions
+    # and would feed the ratio back into itself (SPEC section 6.1).
+    estimate_source_at_completion: Mapped[FieldSource | None] = mapped_column(
+        str_enum(FieldSource, "estimate_source_at_completion")
+    )
     # The EFFECTIVE motive at the time, so the balance survives re-parenting.
     motive_at_completion: Mapped[Motive | None] = mapped_column(
         str_enum(Motive, "motive_at_completion")

@@ -8,9 +8,13 @@ To implement (SPEC section 7):
 - next_slot(task, after, tz): the first RRULE slot strictly after `after`,
   evaluated in naive local wall-clock time from Task.recur_dtstart and
   returned as aware UTC.
-- validate_rrule(text): parse with dateutil; reject sub-daily frequencies.
+- validate_rrule(text): parse with dateutil; reject sub-daily frequencies and
+  BYHOUR / BYMINUTE / BYSECOND; convert a UTC UNTIL to local wall-clock time.
 - roll_forward(session, now, tz): resume expired pauses, spawn due instances,
-  enforce the two-live-instances cap. Idempotent.
+  enforce the two-live-instances cap (dropping a missed instance's open
+  descendants), retire tasks whose rule has run out. Idempotent.
+  A spawned instance copies only the title; it is untriaged, so it waits in
+  the inbox for the triage skill like any capture.
 - after_flexible_completion(...): apply gap_days and build the recurrence check.
 """
 
