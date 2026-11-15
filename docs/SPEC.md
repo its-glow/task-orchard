@@ -2,7 +2,7 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phases 0 (scaffold and schema) and 1 (tasks and graph) are done and tested. Phases 2–6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done and tested. Phases 3–6 are specified here and not yet built.
 
 ## Contents
 
@@ -1054,8 +1054,16 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Search | Matches are ordered by relevance (`bm25`), then most recently updated. A blank `query` (empty or whitespace) is treated as no query; a query of only punctuation is `invalid`. `results` and `total` are always present, even when empty. |
 | Tree | `get_tree` returns `{tree: [nodes], truncated?}`, with one node when `root_id` is given. The roots are level 1, so `depth=1` shows the roots alone. The 100-node cut is breadth-first, so upper levels stay whole, and `more` counts every hidden descendant, whether hidden by `depth` or by the cut. A closed `root_id` is shown even when `include_closed` is false. |
 | `sources` | An entry for a field the call does not write is ignored. An entry naming a field that is not tracked is `invalid`, because it is almost always a typo that would otherwise record a user value as a guess. `firmness` is accepted as another name for `deadline`. |
-| Phase 1 rows | `motive` is the task's own motive, like `priority` and `due`, until Phase 2. Recurring rows already carry the stored part of `recurring` (`mode`, `cadence`, `gap_days`); the computed keys arrive in Phase 4. The detail shows `pattern` as `{id, name}` until the digest arrives in Phase 3. |
+| Phase 1 rows | During Phase 1, `motive` was the task's own motive, like `priority` and `due`; Phase 2 replaced all three with effective values. Recurring rows already carry the stored part of `recurring` (`mode`, `cadence`, `gap_days`); the computed keys arrive in Phase 4. The detail shows `pattern` as `{id, name}` until the digest arrives in Phase 3. |
 | Event payloads | A deadline's wire value is `{at, firmness}` in `updated`, `conflict` and `skipped`. `description` and `notes` are logged by length (`{from_chars, to_chars}`), not copied into the log. Re-writing a field with the same value but a new source (the user confirming a guess) is a change, and is logged. |
 | Update rules | Moving an instance, and clearing `cadence` or `gap_days` on a task that is not recurring, are `unsupported` and `invalid` respectively. `notes` and `append_note` together, or `append_note` with `clear: ["notes"]`, is `invalid`. |
 | Links | A cycle's `path` starts with the edge being added, so the change reads first. `link_tasks` on an existing link returns the rows as well as `already_linked`. |
 | BEGIN IMMEDIATE | Python's `sqlite3` module runs a SELECT outside any transaction and issues its own `BEGIN` only before the first write, so a call's reads were never isolated from its writes. The engine turns that off and issues `BEGIN IMMEDIATE` itself; `test_concurrency.py` checks that a call holds the write lock from its first read. |
+| Closed tasks | Show their own priority, deadline and motive. Effective values are computed over open tasks only (5.4), so a closed task has nothing to inherit. |
+| `via` and ties | Effective deadlines report `via` the same way as priority: the immediate parent, or the explicitly blocked task even when the value came from its descendant. Ties prefer own, then parent, then blocked tasks in id order. |
+| Deadline owner | For "at risk", the owner is found by walking up from the task while the parent's effective deadline in the same pass is the same instant. |
+| Inclusive windows | Every "within" includes its end: `due_within_days`, `horizon_days`, `DUE_SOON_HOURS` and the at-risk window. A task due in exactly 48 hours is within two days. |
+| Shortlist counts | `pool.cut` always has all three groups, with zeros. A row displaced by a reserved want counts as cut in its group, so `total = shown + cut`. |
+| Critical order | Within the same `due`, higher effective priority comes first. |
+| Profile | `size` counts the notes other than the charter, against the 8,000-character total. Topics are at most 100 characters, with spacing collapsed. A replaced note takes the topic's new spelling. Writing the same text again, or deleting a topic that does not exist, writes no event. |
+| Guides and later tools | A guide written before a tool exists mentions it conditionally ("if you have `snooze_task`"), so a small model never calls a tool the server does not have. |

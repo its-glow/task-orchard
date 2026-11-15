@@ -109,7 +109,9 @@ def test_seeded_rows_show_the_flags(orchard: Orchard, seeded: dict[str, int]) ->
     assert "dormant" in orchard.get_task(seeded["taxes"])["task"]["state"]
     assert "overdue" in orchard.get_task(seeded["milk"])["task"]["state"]
     assert "inbox" in orchard.get_task(seeded["inbox_desk"])["task"]["state"]
-    assert "state" not in orchard.get_task(seeded["cert"])["task"]
+    # Free to work on, but the release it blocks is due within 24 hours.
+    assert orchard.get_task(seeded["cert"])["task"]["state"] == ["at_risk"]
+    assert "state" not in orchard.get_task(seeded["novel"])["task"]
 
 
 # --- Property: no candidate is ever blocked, dormant, untriaged or a parent ---

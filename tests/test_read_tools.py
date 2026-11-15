@@ -55,7 +55,9 @@ def test_detail_shape(orchard: Orchard, seeded: dict[str, int]) -> None:
         {"id": seeded["release_publish"], "title": "Publish the signed build", "status": "open"}
     ]
     assert blocker["unblocks"] == 1
-    assert blocker["priority"] == "low"  # own priority until Phase 2
+    assert blocker["priority"] == "critical"  # effective, through the release
+    assert blocker["priority_own"] == "low"
+    assert blocker["priority_via"]["id"] == seeded["release_publish"]
 
     snoozed = orchard.get_task(seeded["taxes"])["task"]
     assert snoozed["snoozed_until"]["rel"] == "in 20 days"

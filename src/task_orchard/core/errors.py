@@ -97,3 +97,16 @@ class ParentClosed(OrchardError):
 class Unsupported(OrchardError):
     def __init__(self, message: str, *, hint: str, **details: Any) -> None:
         super().__init__(ErrorCode.UNSUPPORTED, message, hint=hint, details=details)
+
+
+class ProfileFull(OrchardError):
+    def __init__(self, message: str, **details: Any) -> None:
+        super().__init__(
+            ErrorCode.PROFILE_FULL,
+            message,
+            hint=(
+                "Consolidate first: merge notes that overlap and shorten them with "
+                "write_profile_note (blank text deletes a note), then try again."
+            ),
+            details=details,
+        )
