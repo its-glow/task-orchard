@@ -48,11 +48,6 @@ class Level(_LabelledInt):
     HIGH = 3
 
 
-class TaskKind(StrEnum):
-    TASK = "task"
-    RECURRING = "recurring"
-
-
 class Status(StrEnum):
     OPEN = "open"
     DONE = "done"

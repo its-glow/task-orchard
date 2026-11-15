@@ -24,7 +24,13 @@ This is the build document. It says exactly what each part does, so that impleme
 
 ## 1. Ground rules
 
-1. **The server computes facts; the agent makes judgements.** The server owns invariants, arithmetic, the clock and retrieval. It never ranks by a tuned formula, never decides what something means, and never calls an LLM. If a proposed behaviour is a judgement, it belongs in a skill, not in code.
+1. **The server computes facts; the agent makes judgements. This is a default, not a prohibition.** The server owns invariants, arithmetic, the clock and retrieval, and never calls an LLM. Retrieval already involves simple heuristics: choosing which 20 of 200 tasks the model sees is one (section 5.7). A server-side heuristic is acceptable when all of these hold:
+   - it decides what to **show**, not what to do;
+   - it can be stated in a sentence;
+   - it is visible: the response says what was left out and why;
+   - the caller can adjust or switch it off with a parameter.
+
+   What stays out of the server is opaque scoring: weighted formulas whose result the agent can neither explain nor override. When unsure, start with the agent deciding, and move logic into the server once real use shows the agent is being handed too much or is deciding badly.
 2. **Built for a small model.** Assume the caller is Haiku-class. Facts arrive ready to use. Tools validate everything and explain failures with a hint. A multi-step change is one atomic call.
 3. **Derived, not stored.** Nothing in section 5 or 6.1 is ever written to a column.
 4. **Context is a budget.** Every response is bounded (limits are stated per tool). Lists return compact rows. History reaches the model only as aggregates.
@@ -35,8 +41,8 @@ This is the build document. It says exactly what each part does, so that impleme
 
 | Term | Meaning |
 |---|---|
-| Task | A row in `tasks` with `kind = task`. May have children. |
-| Recurring task | A row with `kind = recurring`. Never completed; only dropped (retired) or snoozed (paused). Mode is `scheduled` or `flexible`. |
+| Task | A row in `tasks`. May have children. A **plain** task is one that is not recurring. |
+| Recurring task | A task with `recur_mode` set, to `scheduled` or `flexible`. Never completed; only dropped (retired) or snoozed (paused). There is no separate type field: being recurring is having a mode. |
 | Instance | A task whose parent is a recurring task. One occurrence of it. |
 | Slot | One date and time produced by a scheduled task's rule. A scheduled instance stands for exactly one slot (`occurrence_at`). |
 | Open | `status = open`. Closed means `done`, `dropped` or `missed`. |
@@ -147,7 +153,6 @@ Used in every list. Built by `views.task_row`. Keys appear in this order; all ar
 |---|---|
 | `id`, `title` | Always present. |
 | `status` | Omitted when `open`. |
-| `kind` | `"recurring"` for recurring tasks; omitted otherwise. |
 | `instance_of` | Id of the recurring parent, for instances. |
 | `path` | Ancestor titles from the root down to the parent, each truncated to 40 characters. Omitted for roots. |
 | `priority` | Effective priority. Always present for open tasks. |
@@ -245,8 +250,8 @@ For a task T at time `now`:
 | `dormant` | T or any ancestor has `snooze_until > now`. |
 | `blocked` | T or any ancestor has an explicit blocker that is open. A dormant blocker still blocks. |
 | `has_open_children` | At least one child is open. |
-| `is_instance` | T's parent has `kind = recurring`. |
-| `candidate` | `open` and `triaged` and not `dormant` and not `blocked` and not `has_open_children`, and either `kind = task`, or `kind = recurring` with `recur_mode = flexible`. |
+| `is_instance` | T's parent is a recurring task. |
+| `candidate` | `open` and `triaged` and not `dormant` and not `blocked` and not `has_open_children`, and T is either a plain task or a flexible recurring task. |
 
 Consequences worth stating:
 
@@ -310,9 +315,14 @@ Computed from `events`:
 Implement in `core/shortlist.py`. There are no weights.
 
 1. **Pool:** all candidates.
-2. **Filters**, applied only when the caller supplies the parameter:
+2. **Filters**, applied only when the caller supplies the parameter, in this order:
+   - `under_id`: keep only that task and its descendants.
+   - `min_priority`: drop tasks whose effective priority is lower.
+   - `due_within_days`: keep only tasks whose `due` is overdue or within that many days. Tasks with no deadline are dropped.
    - `minutes_available`: drop tasks whose `estimate_minutes` is set and larger. Tasks with no estimate stay.
    - `exclude_conditions`: drop tasks having any of the listed condition tags.
+
+   A task removed by more than one filter is counted under the first that removed it. Everything after this step, including the reserve for wants, works on what the filters left.
 3. **Group** each remaining task:
    - `pressing`: overdue or at risk on its **hard** deadline;
    - `due_soon`: overdue on any deadline, or `due` within `DUE_SOON_HOURS`;
@@ -327,7 +337,7 @@ The response also reports what was left out, so the agent knows the shortlist is
 
 ### 5.8 The critical list (`get_critical`)
 
-All **leaves** (open, no open children, `kind = task`, triaged), whether or not they are blocked or dormant, for which any of these holds:
+All **leaves** (open, no open children, not recurring, triaged), whether or not they are blocked or dormant, for which any of these holds:
 
 - overdue;
 - at risk;
@@ -410,7 +420,7 @@ Each section is a list of rows with at most 10 entries, plus a total count. The 
 | Section | Contents, in order |
 |---|---|
 | `inbox` | Untriaged open tasks, oldest first. Limit 30. |
-| `parent_checks` | Open tasks of `kind = task` that have at least one child and no open children. |
+| `parent_checks` | Open plain tasks that have at least one child and no open children. |
 | `overdue` | Open leaves whose own deadline has passed, longest overdue first. Each row adds `overdue_days`. |
 | `most_deferred` | Open tasks with `deferred > 0`, highest first. |
 | `repeat_starts` | Open tasks with `starts > 1`, highest first. |
@@ -619,7 +629,7 @@ Rules:
 
 Break a task into children in one atomic call.
 
-- `parent_id`: an open task of `kind = task`. A recurring task is `unsupported` (subdivide its instance).
+- `parent_id`: an open plain task. A recurring task is `unsupported` (subdivide its instance).
 - `children`: 1 to 12 of `{title, description?, estimate_minutes?, achievable?, priority?, activation?, drain?, conditions?, after?}`.
 - `after?`: positions (counting from 1) of other children in this same call that must be finished first.
 - `sequential?`: default `false`. When `true`, each child is blocked by the one before it, and `after` must not be used.
@@ -672,7 +682,7 @@ Rules:
 
 Returns `{completed: row}` plus, when they apply:
 
-- `parent_check`: when the parent is of `kind = task`, is open and now has no open children: `{parent: row, children: [{title, status}]}` (up to 10, most recently closed first).
+- `parent_check`: when the parent is a plain task, is open and now has no open children: `{parent: row, children: [{title, status}]}` (up to 10, most recently closed first).
 - `recurrence_check`: section 7.2.
 - `next_slot`: a stamp, for a scheduled instance.
 - `unblocked`: rows of tasks for which this was the last open effective blocker.
@@ -724,7 +734,7 @@ Fold a duplicate into the task that should survive.
 **`get_tree(root_id?, depth?, include_closed?)`**
 
 - `root_id` omitted: the forest of root tasks. `depth` 1 to 5, default 2. `include_closed` default `false`.
-- Returns nested nodes `{id, title, status?, kind?, state?, children?, more?}`, where `more` counts descendants below the depth limit.
+- Returns nested nodes `{id, title, status?, recurring?, state?, children?, more?}`, where `recurring` is the mode of a recurring task and `more` counts descendants below the depth limit.
 - At most 100 nodes; if cut, `truncated: true`. Order within a level: open before closed, then id.
 
 **`search_tasks(query?, status?, inbox_only?, limit?)`**
@@ -738,18 +748,29 @@ Fold a duplicate into the task that should survive.
 
 The shortlist of section 5.7.
 
-- `limit?`: 1 to 50, default 20. `minutes_available?`. `energy?`: `low`, `medium`, `high`. `exclude_conditions?`. `reserve_wants?`: 0 to 10, default 3.
+| Parameter | Notes |
+|---|---|
+| `limit?` | 1 to 50, default 20. |
+| `under_id?` | Narrow to one subtree: "what's next on the release?" The id must exist (`not_found`). |
+| `min_priority?` | `low`, `normal`, `high`, `critical`. Narrow to effective priority at or above this. |
+| `due_within_days?` | Number from 0 to 365, fractions allowed. Narrow to what is overdue or due in that window. |
+| `minutes_available?` | Integer above 0. |
+| `exclude_conditions?` | Array of tags. |
+| `energy?` | `low`, `medium`, `high`. Marks rows; never filters. |
+| `reserve_wants?` | 0 to 10, default 3. |
+
+The three narrowing filters exist so the agent can ask a sharper question when the default cut would be the wrong 20. For "is anything urgent", `get_critical` is the better tool, because it also shows urgent work that is blocked.
 
 ```json
 {"now": {...},
  "candidates": [ <rows with group, reserved?, over_energy?> ],
  "pool": {"total": 34, "shown": 20, "cut": {"due_soon": 0, "other": 14}},
- "filtered": {"too_long": 3, "conditions": 1},
+ "filtered": {"outside": 0, "below_priority": 0, "not_due": 0, "too_long": 3, "conditions": 1},
  "conditions_in_pool": ["at-home", "business-hours", "good-weather"],
  "inbox": 3}
 ```
 
-`pool`, `inbox` and `conditions_in_pool` are always present. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
+`pool`, `inbox` and `conditions_in_pool` are always present. `pool.total` counts candidates after filtering; `filtered` counts what each filter removed and includes a key only for filters that were applied. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
 
 ### 8.14 `get_critical` — Phase 2
 
@@ -804,7 +825,7 @@ What each must contain:
 | Skill | Phase | Required content |
 |---|---|---|
 | `triage` | 2 | Read the inbox (`search_tasks(inbox_only=true)`). For each task: guess every field from its wording, parent, `find_patterns` (from Phase 3) and the profile; write them with `update_task` and correct `sources`. The five rules of plan section 5.11, including the question budget: none at capture, at most one per task, batched across tasks. Spot recurring intent ("twice a week") and convert with `recurrence` (from Phase 4). Spot duplicates from `possible_duplicates`. End by telling the user, in two or three lines, what was assumed. |
-| `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. If the user declines an option as "not now", call `snooze_task`. |
+| `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Narrow with `under_id`, `min_priority` or `due_within_days` when the user asks about one project, only important things, or a time window, or when `pool.cut` shows much was left out. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. If the user declines an option as "not now", call `snooze_task`. |
 | `subdivide` | 3 | Read the task with `get_task`. Break down **one layer only**, into 2 to 7 children that are each achievable or clearly need their own breakdown later. Use `sequential` or `after` only where order is real. Act alone when the breakdown is obvious; otherwise propose it and ask. Never plan the whole tree. Stop after two levels in one turn. Call `subdivide_task` once. |
 | `complete-and-reflect` | 3 | Find the task first with `search_tasks(status="any")`; decide between existing, recurring and new (section 8.7). Ask one short question about how it went if the user did not say. Fill `actual_minutes`, `felt_activation`, `felt_drain` from their words. File a pattern: reuse when the match is clear, ask when not. Handle `parent_check`: close or continue without asking when obvious, and say what was done. Handle `recurrence_check` (Phase 4). Update the pattern's `learned` note when the reflection teaches something general. |
 | `onboarding` | 5 | Explain the idea in four sentences. Draft the charter with the user and save it. Confirm the timezone shown in `now`. Take a brain-dump with `capture_tasks`, then run `triage`. Ask about fixed obligations and habits and set up recurrence. Seed two or three profile notes. |
@@ -856,7 +877,7 @@ Build: effective values and section 5.5 in `derive`, `shortlist`, `get_candidate
 | Test module | Must prove |
 |---|---|
 | `test_effective.py` | Each rule in 5.4. Against the seed: `cert` has effective priority `critical` via `release_publish`, and a hard `due` 20 minutes (that task's estimate) before the release deadline; `game_build` has motive `want` via `game`. Unlinking `cert` restores `low` and no deadline. `hard_due` appears only when later than `due`. Property test: effective priority is never below own priority. |
-| `test_shortlist.py` | Grouping and order per 5.7; each filter and its count; `over_energy` never filters; reserved wants are brought in, marked, and replace only non-want rows from `other`; `pool` counts add up. Against the seed: `release_flaky` and `cert` are `pressing`; `summary_w3` is present and overdue; `novel` or a `game_*` task is present even at `limit=5`. |
+| `test_shortlist.py` | Grouping and order per 5.7; each of the five filters alone and combined, its count, and first-filter-wins counting; `under_id` includes the task itself and rejects an unknown id; `over_energy` never filters; reserved wants are brought in, marked, and replace only non-want rows from `other`; `pool` counts add up. Against the seed: `release_flaky` and `cert` are `pressing`; `summary_w3` is present and overdue; `novel` or a `game_*` task is present even at `limit=5`. |
 | `test_critical.py` | Blocked and dormant leaves are included with `blocked_by`; non-leaves are not; horizon boundaries. |
 | `test_profile.py` | Upsert, delete by blank text, case-insensitive topics, each limit and `profile_full`. |
 
@@ -923,7 +944,8 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 |---|---|
 | Time input | A small fixed grammar (3.2) with weekday names and offsets, so the model does no date arithmetic. |
 | Deadlines | Two effective deadlines, `due` and `hard_due`, so a soft early date does not hide a later hard one. |
-| Shortlist | Three plain groups (`pressing`, `due_soon`, `other`) in place of a single "at risk first" rule; three named constants. |
+| Shortlist | Three plain groups (`pressing`, `due_soon`, `other`) in place of a single "at risk first" rule; three named constants. Three optional narrowing filters (`under_id`, `min_priority`, `due_within_days`) under the agent's control. |
+| Posture | "Facts in the server, judgement in the agent" is a default with a stated test for server-side heuristics (section 1), not a prohibition. |
 | Deferral vs. scheduling | `snooze_task` counts as a deferral; `update_task(snooze_until=)` does not. This keeps the resistance signal clean when the agent sets a recurring task's return time. |
 | Flexible instances | A flexible task has at most one open instance. |
 | Early completion | Completing a scheduled task before its instance exists consumes the next slot. |
@@ -936,3 +958,4 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Conflicts | Evidence that disagrees with a user-stated value is logged as a `conflict` event and surfaced in the review queue. |
 | Timezone | Read from the environment or the system, not stored in the database. |
 | Event types | Not constrained in the database, so new types need no migration. |
+| No `kind` field | The plan's `kind` (`task` or `recurring`) is gone. It duplicated `recur_mode`, which was added later; a task is recurring exactly when it has a mode. |

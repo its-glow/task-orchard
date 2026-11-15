@@ -38,7 +38,7 @@ Status: draft 4, 2026-11-14. Built from `INITIAL_PLAN.md` and five rounds of rev
    - *arithmetic and the clock*: date maths, schedules, derived values, aggregation;
    - *retrieval*: cutting hundreds of tasks down to what fits in context.
 
-   The agent owns what things mean: priority, breakdown, ranking, when to repeat, whether a parent is done, what to learn. When a new behaviour is proposed, the test is whether it is a fact or a judgement. Judgement heuristics are not hardcoded.
+   The agent owns what things mean: priority, breakdown, ranking, when to repeat, whether a parent is done, what to learn. When a new behaviour is proposed, the test is whether it is a fact or a judgement. This is a default, not a prohibition: simple, visible, adjustable filtering in the server is fine, and logic can move there when real use shows the agent is handed too much. What stays out is opaque weighted scoring.
 2. **Built for a small model.** Because routine work may run on Haiku, facts arrive ready to use ("due in 2 days", never a timestamp to subtract), tools validate their input and return corrective errors, multi-step changes are single atomic calls, and skills are explicit about steps.
 3. **Derived, not stored.** Blocked, dormant, effective priority, effective deadline and pattern statistics are all computed on read. Nothing can go stale, and undoing a change needs no cleanup.
 4. **Context is a budget.** Every tool response is bounded. Lists return compact rows and details are fetched on request. History reaches the model only as fixed-size digests.
@@ -80,7 +80,7 @@ tests/
 | Field | Notes |
 |---|---|
 | `id`, `title`, `description`, `notes` | |
-| `kind` | `task` or `recurring`. A project is a task with children. |
+| `recur_mode` | Empty for a plain task; `scheduled` or `flexible` for a recurring one. A project is a task with children. (Earlier drafts had a separate `kind` field; it duplicated this and was dropped.) |
 | `status` | `open`, `done`, `dropped`, `missed` (scheduled instances closed by the cap). |
 | `parent_id` | Single parent. Ordering between siblings uses blocker links. |
 | `priority` | 1–4, nullable. Null means inherit. |

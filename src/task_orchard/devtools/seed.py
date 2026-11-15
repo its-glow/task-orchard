@@ -72,7 +72,6 @@ from task_orchard.core.enums import (
     Priority,
     RecurMode,
     Status,
-    TaskKind,
 )
 from task_orchard.core.events import record
 from task_orchard.db.models import Completion, Pattern, ProfileNote, Task, TaskBlock
@@ -483,7 +482,6 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
         "summary",
         "Send the weekly summary to my boss",
         created=slots[0] - timedelta(days=5),
-        kind=TaskKind.RECURRING,
         recur_mode=RecurMode.SCHEDULED,
         cadence="every Friday by 5pm",
         rrule="FREQ=WEEKLY;BYDAY=FR",
@@ -550,7 +548,6 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
             handle,
             title,
             created=z.ago(days=40),
-            kind=TaskKind.RECURRING,
             recur_mode=RecurMode.FLEXIBLE,
             pattern_id=pat.id,
             **fields,

@@ -12,7 +12,7 @@ from alembic.migration import MigrationContext
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
-from task_orchard.core.enums import Firmness, Level, Priority, RecurMode, Status, TaskKind
+from task_orchard.core.enums import Firmness, Level, Priority, RecurMode, Status
 from task_orchard.db.engine import alembic_config, include_name, init_db
 from task_orchard.db.models import Base, Completion, Pattern, Task, TaskBlock
 from tests.conftest import NOW
@@ -27,7 +27,6 @@ def make_task(**fields) -> Task:
 
 def scheduled_fields(**overrides) -> dict:
     fields = dict(
-        kind=TaskKind.RECURRING,
         recur_mode=RecurMode.SCHEDULED,
         rrule="FREQ=WEEKLY;BYDAY=FR",
         recur_dtstart=datetime(2026, 3, 13, 17, 0),
@@ -131,8 +130,6 @@ def test_naive_datetimes_are_refused(session: Session) -> None:
         pytest.param({"closed_at": NOW}, id="open with closed_at"),
         pytest.param({"status": Status.MISSED, "closed_at": NOW}, id="missed but not an instance"),
         pytest.param({"occurrence_at": NOW}, id="occurrence without parent"),
-        pytest.param({"kind": TaskKind.RECURRING}, id="recurring without mode"),
-        pytest.param({"recur_mode": RecurMode.FLEXIBLE}, id="mode on a plain task"),
         pytest.param({"cadence": "weekly"}, id="cadence on a plain task"),
         pytest.param({"gap_days": 3}, id="gap on a plain task"),
         pytest.param({"rrule": "FREQ=DAILY"}, id="rrule on a plain task"),
@@ -147,8 +144,20 @@ def test_naive_datetimes_are_refused(session: Session) -> None:
             scheduled_fields(status=Status.DONE, closed_at=NOW), id="recurring marked done"
         ),
         pytest.param(
-            {"kind": TaskKind.RECURRING, "recur_mode": RecurMode.FLEXIBLE, "rrule": "FREQ=DAILY"},
+            {"recur_mode": RecurMode.FLEXIBLE, "rrule": "FREQ=DAILY"},
             id="rrule on a flexible task",
+        ),
+        pytest.param(
+            {
+                "recur_mode": RecurMode.FLEXIBLE,
+                "deadline": NOW,
+                "deadline_firmness": Firmness.SOFT,
+            },
+            id="flexible with a deadline",
+        ),
+        pytest.param(
+            {"recur_mode": RecurMode.FLEXIBLE, "status": Status.DONE, "closed_at": NOW},
+            id="flexible marked done",
         ),
     ],
 )
@@ -166,9 +175,9 @@ def test_out_of_range_scales_are_refused_twice_over(session: Session) -> None:
     session.rollback()
 
     insert = sa.text(
-        "INSERT INTO tasks (title, kind, status, achievable, conditions, triaged, field_sources,"
+        "INSERT INTO tasks (title, status, achievable, conditions, triaged, field_sources,"
         " created_at, updated_at, priority, drain)"
-        " VALUES ('x', 'task', 'open', 'unknown', '[]', 0, '{}',"
+        " VALUES ('x', 'open', 'unknown', '[]', 0, '{}',"
         " '2026-03-18 10:00:00', '2026-03-18 10:00:00', :priority, :drain)"
     )
     session.execute(insert, {"priority": 4, "drain": 3})
@@ -184,12 +193,17 @@ def test_out_of_range_scales_are_refused_twice_over(session: Session) -> None:
         pytest.param({}, id="bare task"),
         pytest.param(scheduled_fields(), id="scheduled recurring"),
         pytest.param(
-            {"kind": TaskKind.RECURRING, "recur_mode": RecurMode.FLEXIBLE, "gap_days": 2.5},
+            {"recur_mode": RecurMode.FLEXIBLE, "gap_days": 2.5},
             id="flexible recurring",
         ),
         pytest.param(
-            {"kind": TaskKind.RECURRING, "recur_mode": RecurMode.FLEXIBLE, "cadence": "sometimes"},
+            {"recur_mode": RecurMode.FLEXIBLE, "cadence": "sometimes"},
             id="flexible with only a cadence",
+        ),
+        pytest.param({"recur_mode": RecurMode.FLEXIBLE}, id="flexible with nothing else"),
+        pytest.param(
+            {"recur_mode": RecurMode.FLEXIBLE, "status": Status.DROPPED, "closed_at": NOW},
+            id="retired recurring task",
         ),
         pytest.param({"status": Status.DROPPED, "closed_at": NOW}, id="dropped task"),
     ],

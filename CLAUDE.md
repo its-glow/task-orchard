@@ -57,7 +57,7 @@ tests/
 
 ## Rules
 
-- **Facts in the server, judgement in the agent.** No ranking formulas, no thresholds that decide what matters, no LLM calls. If you want to add a heuristic, it belongs in a skill. See SPEC section 1.
+- **Facts in the server, judgement in the agent, by default.** No LLM calls and no opaque weighted scoring. Simple server-side filtering and ordering is fine when it decides what to show, is stated in the spec, reports what it left out, and can be adjusted by a parameter. See SPEC section 1 for the test, and add anything new to the spec before building it.
 - **Derived state is never stored.** Blocked, dormant, candidate, effective priority, deadline and motive, and all statistics are computed on read. Do not add columns for them.
 - **Every mutation goes through `Orchard`**, inside `with self.tx() as tx:`, and writes its events with `record()` in that same transaction. SPEC section 6.4 lists exactly which events each operation writes.
 - **Time comes from `tx.now`.** Never call `datetime.now()`. Datetimes are aware UTC everywhere except `Task.recur_dtstart`.

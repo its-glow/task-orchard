@@ -89,11 +89,6 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column(
-            "kind",
-            sa.Enum("task", "recurring", name="kind", native_enum=False, create_constraint=True),
-            nullable=False,
-        ),
-        sa.Column(
             "status",
             sa.Enum(
                 "open",
@@ -174,10 +169,6 @@ def upgrade() -> None:
         sa.Column("gap_days", sa.Double(), nullable=True),
         sa.Column("occurrence_at", sa.DateTime(), nullable=True),
         sa.CheckConstraint(
-            "(kind = 'recurring') = (recur_mode IS NOT NULL)",
-            name=op.f("ck_tasks_recurring_has_mode"),
-        ),
-        sa.CheckConstraint(
             "(status = 'open') = (closed_at IS NULL)", name=op.f("ck_tasks_closed_at_matches")
         ),
         sa.CheckConstraint(
@@ -193,11 +184,12 @@ def upgrade() -> None:
             name=op.f("ck_tasks_schedule_fields_only_scheduled"),
         ),
         sa.CheckConstraint(
-            "kind != 'recurring' OR (deadline IS NULL AND occurrence_at IS NULL AND status IN ('open', 'dropped'))",
+            "recur_mode IS NULL OR (deadline IS NULL AND occurrence_at IS NULL AND status IN ('open', 'dropped'))",
             name=op.f("ck_tasks_recurring_shape"),
         ),
         sa.CheckConstraint(
-            "kind = 'recurring' OR cadence IS NULL", name=op.f("ck_tasks_cadence_only_recurring")
+            "recur_mode IS NOT NULL OR cadence IS NULL",
+            name=op.f("ck_tasks_cadence_only_recurring"),
         ),
         sa.CheckConstraint(
             "status != 'missed' OR occurrence_at IS NOT NULL",
@@ -247,7 +239,7 @@ def upgrade() -> None:
     with op.batch_alter_table("tasks", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_tasks_parent_id"), ["parent_id"], unique=False)
         batch_op.create_index(batch_op.f("ix_tasks_pattern_id"), ["pattern_id"], unique=False)
-        batch_op.create_index("ix_tasks_status_kind", ["status", "kind"], unique=False)
+        batch_op.create_index("ix_tasks_status", ["status"], unique=False)
         batch_op.create_index(
             "uq_tasks_parent_occurrence",
             ["parent_id", "occurrence_at"],
@@ -399,7 +391,7 @@ def downgrade() -> None:
         batch_op.drop_index(
             "uq_tasks_parent_occurrence", sqlite_where=sa.text("occurrence_at IS NOT NULL")
         )
-        batch_op.drop_index("ix_tasks_status_kind")
+        batch_op.drop_index("ix_tasks_status")
         batch_op.drop_index(batch_op.f("ix_tasks_pattern_id"))
         batch_op.drop_index(batch_op.f("ix_tasks_parent_id"))
 
