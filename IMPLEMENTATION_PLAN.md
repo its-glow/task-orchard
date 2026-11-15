@@ -53,7 +53,7 @@ MCP client / agent (the model)          Android app (later)
    FastMCP adapter                      FastAPI adapter
         └──────────────┬─────────────────────┘
                  core service layer
-  (tasks, graph, scoring, recurrence, history, memory)
+  (tasks, graph, shortlist, recurrence, history, memory)
                        │
                     SQLite
 ```
@@ -65,7 +65,7 @@ MCP client / agent (the model)          Android app (later)
 
 ```
 src/task_orchard/
-  core/      models, graph, scoring, recurrence, history, service
+  core/      graph, derived state, shortlist, recurrence, history, service
   db/        schema, migrations
   mcp/       server, tools, prompts
   api/       FastAPI routes (Phase 6)
@@ -75,6 +75,8 @@ tests/
 
 ## 4. Data model
 
+This is the outline the schema grew from. The schema as built is `src/task_orchard/db/models.py`.
+
 ### `tasks`
 
 | Field | Notes |
@@ -83,7 +85,7 @@ tests/
 | `recur_mode` | Empty for a plain task; `scheduled` or `flexible` for a recurring one. A project is a task with children. (Earlier drafts had a separate `kind` field; it duplicated this and was dropped.) |
 | `status` | `open`, `done`, `dropped`, `missed` (scheduled instances closed by the cap). |
 | `parent_id` | Single parent. Ordering between siblings uses blocker links. |
-| `priority` | 1–4, nullable. Null means inherit. |
+| `priority` | `low`, `normal`, `high` or `critical`; may be empty, which means inherit. |
 | `deadline`, `deadline_firmness` | Both optional. Firmness is `hard` or `soft`. **(default)** The spec's third level is covered by having no deadline. |
 | `snooze_until` | Do not surface before this. A snoozed parent hides its subtree; a snoozed recurring task is paused. |
 | `achievable` | `unknown`, `yes`, `no`. |
@@ -94,8 +96,8 @@ tests/
 | `conditions` | Free-form tags: `good-weather`, `at-home`, `uninterrupted`. |
 | `pattern_id` | The pattern this task belongs to, if any. |
 | `triaged` | False for inbox captures. |
-| `created_at`, `updated_at`, `completed_at` | |
-| Recurring, scheduled | `rrule`, `lead_time`, `last_spawned_slot`, instance template. |
+| `created_at`, `updated_at`, `closed_at` | |
+| Recurring, scheduled | `rrule`, its start and due time, lead time, firmness for instances, `last_spawned_slot`. Instances copy the recurring task's own fields. |
 | Recurring, flexible | `cadence` (free text), optional `gap_days`. |
 | Scheduled instances | `occurrence_at`: the slot this instance stands for. |
 
@@ -130,12 +132,12 @@ Reads return both the own value and the effective one, with where the effective 
 
 ### 5.4 Task demands and user state
 
-Two axes on each task, 1–3:
+Two axes on each task, each low, medium or high:
 
 | Axis | Question | Dentist call | Hobby gamedev |
 |---|---|---|---|
-| `activation` | How hard is it to start? | 3 | 2 |
-| `drain` | How much does doing it take out of you? | 1 | 3 |
+| `activation` | How hard is it to start? | high | medium |
+| `drain` | How much does doing it take out of you? | low | high |
 
 - Difficulty is not a separate field. It shows up as drain and as the time estimate.
 - Focus is not a separate field. "Needs an uninterrupted block" is a condition tag plus the estimate.
@@ -173,7 +175,7 @@ roll_forward(now):                       # start of every request, same transact
       if R already has 2 open instances:
         close the oldest as missed; log a missed event
       create instance(parent=R, occurrence_at=slot, deadline=slot,
-                      snooze_until=slot − lead_time, fields from R's template)
+                      fields copied from R)
       R.last_spawned_slot = slot
       slot = next rrule slot after slot
 ```
@@ -182,7 +184,7 @@ roll_forward(now):                       # start of every request, same transact
 - **Lockstep holds by construction.** Completing Friday's instance on Wednesday, or on Saturday, changes nothing about when next Friday's instance appears.
 - **Missed instances stay, up to a cap of two live.** An instance not done by its slot remains open and overdue next to the newer one. When a third would spawn, the oldest is closed as `missed`. After three weeks away you find two instances, and the history shows the rest as missed. Dropping one yourself requires a reason and is logged as a cancellation, which is distinct from `missed`.
 - **Pause** by snoozing the recurring task. On resume, `last_spawned_slot` jumps to now, so the paused slots are skipped and logged as one paused span, not as misses. **(default)**
-- The template sets firmness (hard by default), priority, estimate, activation and drain for each instance.
+- Each instance copies the recurring task's own priority, estimate, activation and drain. Firmness is hard by default.
 
 #### Flexible: everything else
 
@@ -204,7 +206,7 @@ The agent then uses the recurrence check to decide what happens next. It can lea
 
 ### 5.6 The leading edge
 
-1. `get_candidates` returns the top n. Any with `achievable` other than `yes` are flagged `needs_breakdown`.
+1. `get_candidates` returns the shortlist. A row whose `achievable` is `no` or `unknown` needs breaking down or assessing.
 2. The agent follows the subdivide skill. It acts alone on obvious cases and asks you on unclear ones.
 3. It calls `subdivide_task` once with all children and their ordering. The call is atomic.
 4. It queries again. The skill caps the depth so this cannot spiral.
@@ -215,7 +217,7 @@ The agent then uses the recurrence check to decide what happens next. It can lea
 
 The skill tells the agent to close or keep the parent open without asking when the answer is obvious, to say what it did, and to ask otherwise. "Obviously still open" will be the common clear case. Tuning this is later-phase work.
 
-If nothing is decided, nothing is lost: a non-achievable parent with no open children resurfaces as a candidate flagged `needs_breakdown`.
+If nothing is decided, nothing is lost: a non-achievable parent with no open children resurfaces as a candidate marked not achievable.
 
 ### 5.8 Logging work that wasn't tracked
 
@@ -261,10 +263,10 @@ On using an existing MCP memory server: I would keep memory in Task Orchard. Pat
 
 Draft 2 had a weighted scoring formula here. That was a judgement heuristic in server code, so it is replaced by a shortlist: the server's job is to cut the pool to about 20 rows and attach the facts, and the agent ranks.
 
-- **Order** is deliberately plain and has no tuned weights: tasks at risk first (effective deadline closer than their remaining estimate allows), then effective priority, then deadline slack. It only decides what makes the cut.
+- **Order** is deliberately plain and has no tuned weights: pressing hard deadlines first, then anything due soon, then the rest; within each, by effective priority and then deadline. It only decides what makes the cut.
 - **Reserved places.** Wants are typically low priority with no deadline, so the plain order alone would never show them. A few places in every shortlist are held for the top `want` candidates. This guarantees the agent sees them; whether to offer them stays its call.
-- **Filters** are limited to things that cannot be argued with: a task longer than the minutes available, or a condition the caller says is not met. Energy against drain is reported, not filtered.
-- **Facts per row:** own and effective priority; "due in N days" with firmness and source; estimate; activation; drain; effective motive; how many tasks it unblocks; days since touched; times deferred; false starts; flags (`needs_breakdown`, `recurring`, days past wake-up); and a one-line hint from its pattern if it has one.
+- **Filters** are either facts that cannot be argued with (a task longer than the minutes available, a condition the caller says is not met) or narrowing the agent asks for (one subtree, a minimum priority, a deadline window). Each reports how many tasks it removed. Energy against drain is reported, not filtered.
+- **Facts per row:** own and effective priority; "due in N days" with firmness and source; estimate; activation; drain; effective motive; how many tasks it unblocks; days since touched; times deferred; times started; state flags; for recurring tasks, days past wake-up; and a one-line hint from its pattern if it has one.
 
 These facts take over the role of draft 2's `reasons`: the agent can explain any suggestion from them, and you can see what it was working from. If the plain order proves to leave good candidates below the cut, the first fix is a longer shortlist, not a formula.
 
@@ -292,7 +294,7 @@ Over time the share of fields filled by `pattern` and `evidence` should rise and
 
 | Tool | Purpose |
 |---|---|
-| `capture_task` | Title only, lands in the inbox untriaged. |
+| `capture_tasks` | One or more titles, landing in the inbox untriaged. |
 | `create_task` | Full creation, including recurrence. |
 | `update_task` | Any field, including moving to a new parent; marks triaged. |
 | `subdivide_task` | Atomically add children and ordering to a parent. |
@@ -300,15 +302,15 @@ Over time the share of fields filled by `pattern` and `evidence` should rise and
 | `start_task` | Logs a start. Feeds the false-start signal. |
 | `complete_task` | Sections 5.7 and 5.8. Takes the reflection and pattern. |
 | `snooze_task` | Defer with an optional reason; pauses a recurring task. |
-| `drop_task` | Close without doing, with a reason. Accepts several ids. |
+| `drop_tasks` | Close without doing, with a reason. Accepts several ids. |
 | `reopen_task` | Undo a completion or drop. |
 | `merge_tasks` | Fold a duplicate into another task: moves children, links and notes, then closes it. |
-| `get_candidates` | The shortlist with facts (section 5.10). Takes minutes available, energy, conditions. |
+| `get_candidates` | The shortlist with facts (section 5.10). Takes minutes available, energy, conditions, and optional narrowing by subtree, priority or deadline window. |
 | `get_critical` | High priority or deadline at risk within a horizon, including blocked tasks. |
 | `get_task`, `get_tree`, `search_tasks` | Read access. |
 | `get_review_queue` | Inbox, pending parent checks, per-task upkeep counts, and pairs of tasks with near-identical titles. |
 | `get_recent_activity` | Bounded feed of what happened in a period, plus the want / have-to balance. |
-| `find_patterns`, `update_pattern` | Look up digests; edit the `learned` note; merge two patterns. |
+| `find_patterns`, `save_pattern` | Look up digests; edit the `learned` note; merge two patterns. |
 | `read_profile`, `write_profile_note` | The charter and general user memory. |
 | `get_guide` | Returns a skill's text, for clients that do not surface MCP prompts. |
 
@@ -356,10 +358,10 @@ Each skill is one markdown file, reachable three ways from the same source: as a
 |---|---|---|
 | 0. Scaffold | Project, schema, migrations, event `record()` helper, test harness, seeded demo database. | Run the test suite. |
 | 1. Tasks and graph | CRUD, parents, blockers, cycle check, derived states, candidate pool, FastMCP server with basic tools, `get_guide`. Check Goose's prompt support. | Capture tasks and ask what is available. |
-| 2. Prioritisation | Effective values with provenance (priority, deadline, motive), the shortlist with facts and reserved places, `get_critical`, the charter note. Triage and What-now skills. | Get ranked, explained suggestions. |
+| 2. Prioritisation | Effective values with provenance (priority, deadline, motive), the shortlist with facts and reserved places, `get_critical`, the profile and charter. Triage and What-now skills. | Get ranked, explained suggestions. |
 | 3. Leading edge and completion | `subdivide_task`, parent check, completions, patterns (filing only), `start_task`, snooze, drop, reopen, untracked completion. Subdivide and Reflect skills. | Run a multi-step project end to end. |
 | 4. Recurrence | Scheduled mode with `roll_forward`; flexible mode with recurrence checks. | Track fixed obligations, chores and habits. |
-| 5. Learning and review | Pattern digests and their use in triage, profile notes, review queue, recent activity with the balance, `merge_tasks`. Onboarding, Plan-time-block, Housekeeping and Weekly-review skills. Skill scenarios (section 10). Revisit logging of suggestions not chosen. | Plan a time block; see what it has learned; let it tidy itself. |
+| 5. Learning and review | Pattern digests and their use in triage, review queue, recent activity with the balance, `merge_tasks`. Onboarding, Plan-time-block, Housekeeping and Weekly-review skills. Skill scenarios (section 10). Revisit logging of suggestions not chosen. | Plan a time block; see what it has learned; let it tidy itself. |
 | 6. HTTP and agent | MCP over HTTP with a token, FastAPI read routes, morning and evening skills, deployment notes for Hermes or OpenClaw. | Have an agent check in on you. |
 | 7. Android app | Sketch only: REST for views, a chat channel to the agent, reminders and timers. Planned in detail after Phase 6 has been lived with. | — |
 
@@ -369,8 +371,8 @@ Phases 1–3 are the prototype. I'd suggest using it daily after Phase 3 before 
 
 - **Graph invariants** as property tests: no cycle is ever accepted; a candidate is never blocked or snoozed; effective priority never falls below own priority; unlinking restores the previous effective values.
 - **Recurrence** as table tests with frozen time: early, late, long absence and the two-instance cap, pause and resume, daylight-saving change, month-end rules; `roll_forward` run twice changes nothing.
-- **Shortlist**: at-risk tasks always make the cut; filters never hide a task for a reason other than minutes or conditions; every fact in a row matches the underlying data.
-- **Event log**: every mutating service call produces exactly one event in the same transaction.
+- **Shortlist**: pressing tasks always make the cut; a filter hides a task only when the caller applied it, and reports how many; every fact in a row matches the underlying data.
+- **Event log**: every mutating service call produces exactly the events the spec lists for it, in the same transaction.
 - **Tools** exercised through an in-memory MCP client, including a check on response size.
 - **Skills** get a short manual script each, run against the seeded database in Goose, through Phase 4.
 - **Skill scenarios** from Phase 5: a seeded database plus a user message, with the expected tool calls and end state. Moving judgement to the agent moves the risk there too, and this is the only way to tell whether a cheaper model handles a skill well enough or needs a larger one.

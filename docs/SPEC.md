@@ -66,7 +66,7 @@ This is the build document. It says exactly what each part does, so that impleme
 - `tx.now` is the only source of the current time. Nothing calls `datetime.now()`.
 - The user's timezone is `tx.tz`. All parsing and formatting below use it.
 
-### 3.2 Parsing input: `parse_when(text, tz, now) -> datetime`
+### 3.2 Parsing input: `parse_when(text, tz, now, day_means) -> datetime`
 
 Every tool parameter that takes a point in time accepts exactly these forms. Matching ignores case and surrounding whitespace.
 
@@ -80,7 +80,13 @@ Every tool parameter that takes a point in time accepts exactly these forms. Mat
 | Offset from now | `+3d`, `+2w`, `+90m`, `+4h` | Days and weeks give a day; minutes and hours give an exact instant. |
 
 - Any day form may be followed by a time: `friday 17:00`, `tomorrow 09:30`, `+3d 12:00`.
-- **A day with no time means the end of that day: 23:59 local.**
+- **What a day with no time means depends on what the parameter is for.** `parse_when` takes this as `day_means`:
+
+  | Parameter | A bare day means |
+  |---|---|
+  | `deadline` | The end of that day: 23:59. |
+  | `snooze_until`, `until` | The start of that day: 00:00. Something snoozed "until Friday" is back on Friday morning. |
+  | `completed_at` | 12:00 that day, or `now` if that would be in the future. |
 - A local time that does not exist (spring forward) moves forward to the next valid minute. An ambiguous one (fall back) takes the first occurrence.
 - Anything else raises `invalid` with the hint: `Use a date like 2026-11-20, a date and time like 2026-11-20T17:00, a weekday name, "tomorrow", or an offset like +3d.`
 
@@ -111,11 +117,13 @@ N is rounded down. For a deadline that has passed, `rel` is `overdue by N days` 
 
 "Today" runs from local midnight to local midnight. "Within N days" in this document means within N × 24 hours of `now` unless it says "calendar days".
 
+**A snooze counted in days ends at the start of a day.** When a snooze is set by a number of days (`snooze_task(days=)`, or a flexible task's `gap_days`), it ends at local midnight at the start of the day that falls that many × 24 hours after the starting instant. A run finished on Monday evening with a gap of 2 is back on Wednesday morning, not Wednesday evening.
+
 ## 4. Wire conventions
 
 ### 4.1 General
 
-- Every tool returns one JSON object. Every object includes `now`: a stamp without `rel`.
+- Every tool returns one JSON object. Every object includes `now`: a stamp without `rel`. (`get_guide` is the one exception.)
 - **Enumerated values are exchanged by name**: `"high"`, `"have_to"`, `"soft"`. Numbers are never used for scales. An unknown name raises `invalid` and lists the valid names.
 - **Empty keys are omitted.** A key whose value would be null, `[]`, `{}`, `false` or `0` is left out, unless this document says "always present".
 - Titles in rows are truncated to 80 characters with a trailing `…`.
@@ -155,7 +163,7 @@ Used in every list. Built by `views.task_row`. Keys appear in this order; all ar
 | `status` | Omitted when `open`. |
 | `instance_of` | Id of the recurring parent, for instances. |
 | `path` | Ancestor titles from the root down to the parent, each truncated to 40 characters. Omitted for roots. |
-| `priority` | Effective priority. Always present for open tasks. |
+| `priority` | Effective priority. Omitted when neither the task nor anything it inherits from sets one (section 5.4). |
 | `priority_via` | `{id, title, how}` when the effective priority is not the task's own. `how` is `"parent"` or `"blocks"`. |
 | `priority_own` | The task's own priority, only when it differs from the effective one. |
 | `due` | The earliest effective deadline: a stamp plus `firmness`, plus `via` (as above) when inherited. |
@@ -270,7 +278,7 @@ All three are computed by memoised recursion along the edges of 5.1, which is sa
 - the effective priority of T's parent;
 - the effective priority of every open task T effectively blocks.
 
-If none of these exists, it is `normal`. The source is reported as `via`: the parent, or the blocked task that supplied the value (the explicitly blocked one, even when the value came up through its descendant). Ties prefer own, then parent.
+If none of these exists, the task has no effective priority: the key is omitted from rows, and wherever tasks are ordered or filtered by priority it counts as `normal`. The source is reported as `via`: the parent, or the blocked task that supplied the value (the explicitly blocked one, even when the value came up through its descendant). Ties prefer own, then parent.
 
 **Effective deadline** is computed twice, once over all deadlines and once over hard deadlines only, giving `due` and `hard_due`. Each is the earliest of:
 
@@ -287,8 +295,12 @@ Required property (test it): removing a link or moving a task changes effective 
 ### 5.5 Remaining work, overdue and at risk
 
 - `remaining_minutes(T)`: if T has open children, the sum of `remaining_minutes` over them; otherwise T's `estimate_minutes`, or 0 if unset.
-- `overdue`: `due` is in the past.
-- `at_risk`: not overdue, and `due` is within the larger of 24 hours and `3 × remaining_minutes(T)`.
+- A deadline is **overdue** when it is in the past.
+- A deadline is **at risk** when it is not overdue and falls within the larger of 24 hours and `3 × W` from now. W is the work that has to fit before that deadline: `remaining_minutes` of the **highest ancestor of T, or T itself, that has the same effective deadline** in that pass.
+  - When T inherits a project's deadline unchanged, W is the whole project's remaining work. A project due in three days with thirty hours of open work makes every one of its leaves at risk now, not on the last day.
+  - When T's deadline is earlier than its parent's (its own, or pulled earlier through a blocker link), W is T's own remaining minutes.
+
+Both tests are applied to `due` for the `overdue` and `at_risk` flags in rows and for the critical list. They are applied to the hard-pass deadline of 5.4 (whether or not it is reported as `hard_due`) for the `pressing` group of the shortlist.
 
 The factor of 3 stands for the fact that only part of any stretch of wall-clock time is workable. It and the other two constants below live in `core/shortlist.py` and nowhere else:
 
@@ -324,7 +336,7 @@ Implement in `core/shortlist.py`. There are no weights.
 
    A task removed by more than one filter is counted under the first that removed it. Everything after this step, including the reserve for wants, works on what the filters left.
 3. **Group** each remaining task:
-   - `pressing`: overdue or at risk on its **hard** deadline;
+   - `pressing`: its hard-pass deadline is overdue or at risk (section 5.5);
    - `due_soon`: overdue on any deadline, or `due` within `DUE_SOON_HOURS`;
    - `other`: everything else.
 4. **Order** by: group (pressing, due_soon, other); effective priority, highest first; `due`, earliest first, none last; `created_at`, oldest first; id.
@@ -396,13 +408,13 @@ Written only through `core.events.record()`, with `at = tx.now`. The table below
 | Operation | Events (task the event is on) and payload |
 |---|---|
 | `capture_tasks` | `created` (each new task) `{via: "capture"}` |
-| `create_task` | `created` (new task) `{via: "create", parent_id}`; `linked` per link; `spawned` is **not** used here |
-| `update_task` | `updated` (task) `{changes: {field: {from, to}}}`; plus `paused` or `resumed` (task) when a scheduled task's own snooze is set or cleared; plus `conflict` (task) `{field, kept, proposed, source}` per protected field skipped with source `pattern` or `evidence` |
+| `create_task` | `created` (new task) `{via: "create", parent_id}`; `linked` per link; `updated` (parent) when its `achievable` was flipped (section 8.2); `pattern_saved` when a pattern was created for a new recurring task |
+| `update_task` | `updated` (task) `{changes: {field: {from, to}}}`; plus `paused` or `resumed` (task) when a scheduled task's own snooze is set or cleared; plus `conflict` (task) `{field, kept, proposed, source}` per protected field skipped with source `pattern` or `evidence`; plus `updated` (new parent) when a move flipped its `achievable`; plus `pattern_saved` when converting to recurring created a pattern |
 | `subdivide_task` | `created` (each child) `{via: "subdivide", parent_id}`; `linked` per ordering link; `subdivided` (parent) `{children: [ids]}` |
 | `link_tasks` | `linked` (blocked task) `{blocker_id, blocked_id}` |
 | `unlink_tasks` | `unlinked` (blocked task) `{blocker_id, blocked_id}` |
 | `start_task` | `started` (task) `{}` |
-| `complete_task` | `completed` (the task that became done) `{actual_minutes, completed_at, recurring_id?}`; preceded by `created` `{via: "complete"}` when the task was created by this call; preceded by `dropped` `{reason: "parent completed", cascade_from}` for each open child dropped |
+| `complete_task` | `completed` (the task that became done) `{actual_minutes, completed_at, recurring_id?, sleeping_until?}`; preceded by `created` `{via: "complete"}` when the task was created by this call, or by `spawned` when a scheduled task's next instance was created by this call; preceded by `dropped` `{reason: "parent completed", cascade_from}` for each open child dropped; plus `pattern_saved` when `new_pattern` created one |
 | `snooze_task` | `snoozed` (task) `{until, reason, previous}`; or `woken` (task) `{previous}`; for a scheduled recurring task `paused` `{until, reason}` or `resumed` `{skipped_until}` instead |
 | `drop_tasks` | `dropped` (each task, including descendants) `{reason, cascade_from?}` |
 | `reopen_task` | `reopened` (task) `{was, completion?}` where `completion` holds the deleted completion row's fields |
@@ -457,7 +469,7 @@ Stored fields: `rrule`, `recur_dtstart`, `lead_minutes`, `recur_firmness`, `last
 - `recur_dtstart` is set when the rule is created or changed: today's local date at the rule's due time. The due time comes from the `due_time` parameter (`HH:MM`, default `23:59`).
 - A rule with no `BYDAY`, `BYMONTHDAY` or similar therefore repeats from the day it was created. The create response shows the next three slots so the agent can confirm the rule means what the user meant.
 
-`next_slot(R, after)` is the first slot strictly later than `after`.
+`next_slot(R, after)` is the first slot strictly later than `after`. `after` is converted to local wall-clock time before the rule is consulted.
 
 **Creation.** `last_spawned_slot = now`, so the first instance is for the first slot after creation.
 
@@ -491,7 +503,7 @@ while slot exists and slot − lead <= now and spawned < 60:
 - The limit of 60 per request only bounds one request; the next request continues.
 - Only R's **own** snooze pauses it. A snooze on an ancestor hides R's instances but does not stop them spawning.
 
-**Pausing.** Setting R's own `snooze_until` (through `snooze_task` or `update_task`) is a pause: `paused` is logged, open instances become dormant, and nothing spawns. When the pause ends, by the clock or by waking, `last_spawned_slot` jumps forward so the paused slots are skipped, and `resumed` is logged.
+**Pausing.** Setting R's own `snooze_until` (through `snooze_task` or `update_task`) is a pause: `paused` is logged, open instances become dormant, and nothing spawns. When the pause ends, by the clock or by waking, `last_spawned_slot` jumps forward to the moment the pause ended (never backward), so the paused slots are skipped, and `resumed` is logged.
 
 **Completing R directly.** `complete_task` on a scheduled recurring task means "this occurrence is done":
 
@@ -508,8 +520,8 @@ Stored fields: `cadence` (free text for the agent) and optionally `gap_days`.
 
 **Completion.** When an instance of flexible R is completed, or R is completed directly:
 
-1. If R was completed directly, a done instance is created under it to hold the completion (title and fields copied as in 7.1, no `occurrence_at`, no deadline). R itself stays open.
-2. If `gap_days` is set, `R.snooze_until = completed_at + gap_days`. If not, `snooze_until` is left as it is.
+1. If R was completed directly and has an open instance, that instance is the one completed. If it has none, a done instance is created under it to hold the completion (title and fields copied as in 7.1, no `occurrence_at`, no deadline). R itself stays open.
+2. If `gap_days` is set, `R.snooze_until` is set from `completed_at` and `gap_days` by the rule in section 3.4. If not, `snooze_until` is left as it is.
 3. The response carries a **recurrence check**:
 
 ```json
@@ -563,7 +575,7 @@ Create a triaged task with whatever is known.
 
 | Parameter | Notes |
 |---|---|
-| `title` | Required, non-blank, at most 500 characters. |
+| `title` | Required, non-blank, at most 500 characters. Optional when the parent is a flexible recurring task, in which case it is copied from the parent. |
 | `description?`, `notes?` | |
 | `parent_id?` | Must be open (`parent_closed`). |
 | `priority?` | `low`, `normal`, `high`, `critical`. |
@@ -581,7 +593,7 @@ Create a triaged task with whatever is known.
 
 Rules:
 
-- Adding a child to a task sets that parent's `achievable` to `no`.
+- Adding a child to a task (here, through `subdivide_task`, or by a move) sets that parent's `achievable` to `no` if it was not already. This is structural, so it applies even to a `user`-sourced value; the source becomes `evidence`.
 - If the parent is a flexible recurring task, this spawns an instance (section 7.2). If it is scheduled, `unsupported`.
 - `recurrence` together with `deadline`, or with a recurring parent, is `invalid`.
 - Returns `{task}`; for a scheduled task also `next_slots`: the next three slots as stamps.
@@ -621,7 +633,7 @@ Rules:
 
 - Omitted means unchanged. Unsetting is done only through `clear`.
 - Setting `parent_id` moves the task. The new parent must be open; the move is cycle-checked. Instances cannot be moved, and nothing can be moved under a recurring task this way.
-- On a **closed** task only `description`, `notes`, `append_note` and `pattern_id` may change. Anything else is `not_open`.
+- On a **closed** task only `description`, `notes`, `append_note` and `pattern_id` may change, and `triaged` is left as it is. Anything else is `not_open`.
 - Protected fields are skipped and reported (section 4.5).
 - Returns `{task, skipped?}`. A call that changes nothing returns the task and writes no event.
 
@@ -662,7 +674,7 @@ Record that something was done.
 |---|---|
 | `task_id?` | The task that was done. |
 | `title?` | Instead of `task_id`: create a new task with this title and complete it (untracked work). Exactly one of the two. |
-| `parent_id?`, `motive?`, `description?` | Only with `title`. |
+| `parent_id?`, `motive?`, `description?` | Only with `title`. A recurring `parent_id` is `invalid`: pass the recurring task as `task_id` instead. |
 | `completed_at?` | Section 3.2; default now. Must not be in the future. |
 | `actual_minutes?` | Integer, 0 or more. |
 | `felt_activation?`, `felt_drain?` | `low`, `medium`, `high`. |
@@ -678,7 +690,7 @@ Rules:
 - A blocked or dormant task can be completed.
 - A recurring target follows section 7.1 or 7.2.
 - Writes the `completions` row with `estimate_at_completion` and `motive_at_completion` (the **effective** motive at this moment).
-- Sets `status = done` and `closed_at = completed_at`.
+- Sets `status = done` and `closed_at = now`. When the work was actually done is `completed_at` on the completion row, which may be earlier.
 
 Returns `{completed: row}` plus, when they apply:
 
@@ -692,7 +704,7 @@ Returns `{completed: row}` plus, when they apply:
 The user is putting something off, or a recurring task is being paused.
 
 - `task_id`: must be open.
-- `until?` (section 3.2) or `days?` (number). Exactly one.
+- `until?` (section 3.2) or `days?` (number, rounded as in section 3.4). Exactly one.
 - `reason?`.
 - If the resulting time is not after `now` (including `days: 0`), the snooze is cleared instead: this is how to wake a task.
 - Events per section 6.4. Returns `{task}`.
@@ -713,6 +725,8 @@ Undo a completion, drop or miss.
 - The task must be closed (`already_open`). Its parent must be open (`parent_closed`, with the hint to reopen the parent first).
 - Sets `status = open`, clears `closed_at`, deletes the completion row (its fields are kept in the event payload).
 - A scheduled instance cannot be reopened if its recurring task already has two open instances (`instance_cap`).
+- Reopening a flexible instance while its recurring task has another open instance is `instance_exists`.
+- Reopening a scheduled recurring task sets `last_spawned_slot` to the later of its current value and `now`, so slots that passed while it was retired are skipped. Its instances stay as they were.
 - Does not undo a flexible task's gap snooze; the response says so in `note` when that applies.
 - Returns `{task, note?}`.
 
@@ -765,12 +779,12 @@ The three narrowing filters exist so the agent can ask a sharper question when t
 {"now": {...},
  "candidates": [ <rows with group, reserved?, over_energy?> ],
  "pool": {"total": 34, "shown": 20, "cut": {"due_soon": 0, "other": 14}},
- "filtered": {"outside": 0, "below_priority": 0, "not_due": 0, "too_long": 3, "conditions": 1},
+ "filtered": {"too_long": 3, "conditions": 1},
  "conditions_in_pool": ["at-home", "business-hours", "good-weather"],
  "inbox": 3}
 ```
 
-`pool`, `inbox` and `conditions_in_pool` are always present. `pool.total` counts candidates after filtering; `filtered` counts what each filter removed and includes a key only for filters that were applied. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
+`pool`, `inbox` and `conditions_in_pool` are always present, and the counts inside `pool` and `filtered` keep their zeros. `pool.total` counts candidates after filtering. `filtered` has one key per filter the caller applied (`outside`, `below_priority`, `not_due`, `too_long`, `conditions`) and none for the others. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
 
 ### 8.14 `get_critical` — Phase 2
 
@@ -825,7 +839,7 @@ What each must contain:
 | Skill | Phase | Required content |
 |---|---|---|
 | `triage` | 2 | Read the inbox (`search_tasks(inbox_only=true)`). For each task: guess every field from its wording, parent, `find_patterns` (from Phase 3) and the profile; write them with `update_task` and correct `sources`. The five rules of plan section 5.11, including the question budget: none at capture, at most one per task, batched across tasks. Spot recurring intent ("twice a week") and convert with `recurrence` (from Phase 4). Spot duplicates from `possible_duplicates`. End by telling the user, in two or three lines, what was assumed. |
-| `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Narrow with `under_id`, `min_priority` or `due_within_days` when the user asks about one project, only important things, or a time window, or when `pool.cut` shows much was left out. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. If the user declines an option as "not now", call `snooze_task`. |
+| `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Narrow with `under_id`, `min_priority` or `due_within_days` when the user asks about one project, only important things, or a time window, or when `pool.cut` shows much was left out. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. If the user declines an option as "not now", call `snooze_task`. When an offered task's soft deadline is long past, ask once whether to re-date it or clear it, so stale dates do not crowd the shortlist before housekeeping exists. |
 | `subdivide` | 3 | Read the task with `get_task`. Break down **one layer only**, into 2 to 7 children that are each achievable or clearly need their own breakdown later. Use `sequential` or `after` only where order is real. Act alone when the breakdown is obvious; otherwise propose it and ask. Never plan the whole tree. Stop after two levels in one turn. Call `subdivide_task` once. |
 | `complete-and-reflect` | 3 | Find the task first with `search_tasks(status="any")`; decide between existing, recurring and new (section 8.7). Ask one short question about how it went if the user did not say. Fill `actual_minutes`, `felt_activation`, `felt_drain` from their words. File a pattern: reuse when the match is clear, ask when not. Handle `parent_check`: close or continue without asking when obvious, and say what was done. Handle `recurrence_check` (Phase 4). Update the pattern's `learned` note when the reflection teaches something general. |
 | `onboarding` | 5 | Explain the idea in four sentences. Draft the charter with the user and save it. Confirm the timezone shown in `now`. Take a brain-dump with `capture_tasks`, then run `triage`. Ask about fixed obligations and habits and set up recurrence. Seed two or three profile notes. |
@@ -839,7 +853,7 @@ What each must contain:
 - `mcp/server.py::build_server` registers every tool. A tool function does three things: accept arguments, call one `Orchard` method, return its dict. Wrap each with `guarded`.
 - **Tool descriptions** are read by the model on every turn. Each says, in at most about 80 words: when to use the tool, in the user's terms; and anything surprising about it. Parameter descriptions give one example value each.
 - Parameters use the wire forms of section 4: names for enumerated values, strings per section 3.2 for times. Annotate with `Literal[...]` so the schema lists the choices.
-- Declare read tools with `annotations={"readOnlyHint": True}`.
+- Declare read tools with `annotations={"readOnlyHint": True}`. The bookkeeping `roll_forward` does at the start of a read does not count against this.
 - `INSTRUCTIONS` tells the client to read the `overview` guide. From Phase 2, change it to: read the profile with `read_profile` at the start of a conversation, then the overview.
 - Each skill is also registered as an MCP prompt (already wired).
 - **Phase 1 check:** confirm in Goose that tools are callable, and note in `README.md` whether Goose surfaces MCP prompts and server instructions. `get_guide` works regardless.
@@ -861,9 +875,13 @@ Build: `timefmt`, `views`, `graph`, the predicates of `derive`, and `capture_tas
 
 Until Phase 2, rows show own priority and own deadline in place of effective ones.
 
+Other row keys arrive with the phase that computes them: `deferred`, `starts`, `touched` and `pattern` in Phase 3; the `recurring` block in Phase 4; `pattern.ratio` in Phase 5.
+
+The seed already contains recurring tasks, so the predicates must handle them from Phase 1. Until Phase 4, a write whose target is a recurring task raises `unsupported`; reads treat it like any other task, and its instances behave as plain tasks.
+
 | Test module | Must prove |
 |---|---|
-| `test_timefmt.py` | Every form in 3.2, including end-of-day, weekday-after-today, and both daylight-saving edge cases; every row of the `rel` table; rejection with the stated hint. |
+| `test_timefmt.py` | Every form in 3.2, including what a bare day means for each kind of parameter, weekday-after-today, and both daylight-saving edge cases; day-counted snoozes ending at local midnight (3.4); every row of the `rel` table; rejection with the stated hint. |
 | `test_graph.py` | Each rejection case in 5.2 with a readable path. Property test (hypothesis): after any sequence of accepted links and moves, the graph is acyclic. |
 | `test_derive_predicates.py` | Each predicate, including dormancy and blocking inherited from an ancestor. Property test: no candidate is ever blocked, dormant, untriaged or a parent of open children. Against the seed: `offsite_venue` is blocked through `offsite`; `taxes` is dormant; `release_notes` is blocked; `cert` is a candidate. |
 | `test_tasks_crud.py` | Create, update, clear, move; field sources and protection (4.5); closed-task restrictions; adding a child flips the parent's `achievable`; exact events per 6.4; a failed call writes nothing. |
@@ -878,7 +896,7 @@ Build: effective values and section 5.5 in `derive`, `shortlist`, `get_candidate
 |---|---|
 | `test_effective.py` | Each rule in 5.4. Against the seed: `cert` has effective priority `critical` via `release_publish`, and a hard `due` 20 minutes (that task's estimate) before the release deadline; `game_build` has motive `want` via `game`. Unlinking `cert` restores `low` and no deadline. `hard_due` appears only when later than `due`. Property test: effective priority is never below own priority. |
 | `test_shortlist.py` | Grouping and order per 5.7; each of the five filters alone and combined, its count, and first-filter-wins counting; `under_id` includes the task itself and rejects an unknown id; `over_energy` never filters; reserved wants are brought in, marked, and replace only non-want rows from `other`; `pool` counts add up. Against the seed: `release_flaky` and `cert` are `pressing`; `summary_w3` is present and overdue; `novel` or a `game_*` task is present even at `limit=5`. |
-| `test_critical.py` | Blocked and dormant leaves are included with `blocked_by`; non-leaves are not; horizon boundaries. |
+| `test_critical.py` | Blocked and dormant leaves are included with `blocked_by`; non-leaves are not; horizon boundaries. At risk is judged on the work of whoever owns the deadline (5.5): the leaves of a project due in three days with thirty hours of open work are listed, while a leaf with its own earlier deadline is judged on its own estimate. |
 | `test_profile.py` | Upsert, delete by blank text, case-insensitive topics, each limit and `profile_full`. |
 
 ### Phase 3 — Leading edge and completion
@@ -954,7 +972,11 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Tool names | `save_pattern` replaces `update_pattern`; `drop_tasks` is plural. |
 | `update_task` | Unsetting is explicit, through `clear`, because JSON cannot distinguish "omitted" from "null" reliably across clients. |
 | Completion row | Stores the effective motive at completion, so the balance survives re-parenting. |
-| Closed status | `closed_at` records when any closed state began; `completed_at` lives on the completion row and may be earlier. |
+| Closed status | `closed_at` records when the task was closed in the system; `completed_at` lives on the completion row, records when the work was done, and may be earlier. |
+| Bare days | A date with no time means end of day for a deadline, start of day for a snooze, and midday for a completion. |
+| Day-counted snoozes | End at local midnight, so a snoozed or resting task is back in the morning. |
+| At risk | Judged against the remaining work of the whole project that owns the deadline, not the single task's estimate, so a large project is flagged before its last day. |
+| Unset priority | A task with no priority of its own or inherited shows none, and is ordered as `normal`. |
 | Conflicts | Evidence that disagrees with a user-stated value is logged as a `conflict` event and surfaced in the review queue. |
 | Timezone | Read from the environment or the system, not stored in the database. |
 | Event types | Not constrained in the database, so new types need no migration. |

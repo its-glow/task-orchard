@@ -74,7 +74,7 @@ tests/
 4. Review the generated file. Autogenerate does **not** see changes to CHECK constraints or to the full-text tables; write those by hand.
 5. `uv run pytest tests/test_schema.py` — fails if models and migrations disagree.
 
-Never edit a migration that has been released; add a new one. Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
+Never edit a migration once a real database has been created from it; add a new one. (The initial migration has been edited in place so far, because none has.) Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
 
 ## Things that will bite
 
