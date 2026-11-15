@@ -8,13 +8,13 @@ A single-user task and time management service with an MCP interface. The server
 2. `IMPLEMENTATION_PLAN.md` — why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phase 0 (scaffold and schema) is done. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
+Phases 0 (scaffold and schema) and 1 (tasks and graph) are done. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
 
 ## Commands
 
 ```
 uv sync                      # install
-uv run pytest                # all tests (about 7 seconds)
+uv run pytest                # all tests (about 25 seconds)
 uv run pytest tests/test_x.py -k name
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format
@@ -33,11 +33,12 @@ src/task_orchard/
     errors.py          OrchardError and friends (done)
     clock.py           the only source of "now" (done)
     events.py          record(): the only way to write an event (done)
-    service.py         Orchard: transaction wrapper done; operations to add
-    timefmt.py         parsing and formatting times        (Phase 1)
-    views.py           JSON row and detail builders        (Phase 1)
-    graph.py           blocking graph and cycle checks     (Phase 1)
-    derive.py          predicates, effective values        (Phases 1-2)
+    service.py         Orchard: one method per operation (Phase 1 ops done)
+    wire.py            reading arguments: lenient names, ids, sources (done)
+    timefmt.py         parsing and formatting times        (done)
+    views.py           JSON row and detail builders        (done for Phase 1)
+    graph.py           blocking graph and cycle checks     (done)
+    derive.py          Snapshot: predicates (done), effective values (Phase 2)
     shortlist.py       get_candidates, get_critical        (Phase 2)
     history.py         counts, digests, balance, review    (Phases 3, 5)
     recurrence.py      roll_forward and friends            (Phase 4)
@@ -47,7 +48,7 @@ src/task_orchard/
     engine.py          engine, sessions, init_db (done)
     migrations/        Alembic
   mcp/
-    server.py          FastMCP adapter; get_guide done, tools to add
+    server.py          FastMCP adapter; Phase 1 tools done
     guides.py          loads skills (done)
   skills/              one markdown file per skill; overview.md exists
   devtools/seed.py     demo data, addressed by handle

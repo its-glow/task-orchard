@@ -55,11 +55,45 @@ class CycleError(OrchardError):
     """The requested link or move would make tasks wait on each other."""
 
     def __init__(self, path: list[dict[str, Any]]) -> None:
-        # `path` is the loop as [{id, title, because}], in must-finish-first order.
+        # `path` is the loop as [{id, title, status, because}], in
+        # must-finish-first order; the last entry repeats the first. `because`
+        # describes the edge to the next entry. Closed tasks can be on it.
         chain = " -> ".join(f"#{step['id']}" for step in path)
         super().__init__(
             ErrorCode.CYCLE,
             f"That would create a loop where tasks wait on each other: {chain}.",
-            hint="Remove one of the links in the loop first, or link different tasks.",
+            hint=(
+                "Link or move different tasks, or first remove a 'blocks' link in the loop "
+                "with unlink_tasks (it works on closed tasks too)."
+            ),
             details={"path": path},
         )
+
+
+class NotOpen(OrchardError):
+    def __init__(self, task_id: int, status: str, *, doing: str = "change that") -> None:
+        super().__init__(
+            ErrorCode.NOT_OPEN,
+            f"Task {task_id} is {status}, so you cannot {doing}.",
+            hint=(
+                "If the user wants to work on it again, call reopen_task first. "
+                "On a closed task, update_task can still change description, notes "
+                "and pattern_id."
+            ),
+            details={"task_id": task_id, "status": status},
+        )
+
+
+class ParentClosed(OrchardError):
+    def __init__(self, parent_id: int, status: str) -> None:
+        super().__init__(
+            ErrorCode.PARENT_CLOSED,
+            f"Task {parent_id} is {status}, so nothing can be added under it.",
+            hint="Reopen the parent with reopen_task first, or choose an open parent.",
+            details={"parent_id": parent_id, "status": status},
+        )
+
+
+class Unsupported(OrchardError):
+    def __init__(self, message: str, *, hint: str, **details: Any) -> None:
+        super().__init__(ErrorCode.UNSUPPORTED, message, hint=hint, details=details)

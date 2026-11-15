@@ -2,7 +2,7 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phase 0 (scaffold and schema) is done and tested. Phases 1–6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema) and 1 (tasks and graph) are done and tested. Phases 2–6 are specified here and not yet built.
 
 ## Contents
 
@@ -421,7 +421,7 @@ Written only through `core.events.record()`, with `at = tx.now`. The table below
 |---|---|
 | `capture_tasks` | `created` (each new task) `{via: "capture"}` |
 | `create_task` | `created` (new task) `{via: "create", parent_id}`; `linked` per link; `updated` (parent) when its `achievable` was flipped (section 8.2); `updated` (recurring parent) `{changes: {snooze_until}}` when creating an instance under a sleeping flexible task woke it (section 7.2) |
-| `update_task` | `updated` (task) `{changes: {field: {from, to, source?}}}`, where `source` is present for tracked fields and is the source the value was written with; plus `paused` or `resumed` (task) when a scheduled task's own snooze is set or cleared; plus `conflict` (task) `{field, kept, proposed, source}` per protected field skipped with source `pattern` or `evidence`; plus `updated` (new parent) when a move flipped its `achievable` |
+| `update_task` | `updated` (task) `{changes: {field: {from, to, source?}}}`, where `source` is present for tracked fields and is the source the value was written with, and a deadline's value is `{at, firmness}`; `description` and `notes` are logged by length instead, as `{from_chars, to_chars}`, so long text is not copied into the log; plus `paused` or `resumed` (task) when a scheduled task's own snooze is set or cleared; plus `conflict` (task) `{field, kept, proposed, source}` per protected field skipped with source `pattern` or `evidence`; plus `updated` (new parent) when a move flipped its `achievable` |
 | `subdivide_task` | `created` (each child) `{via: "subdivide", parent_id}`; `linked` per ordering link; `subdivided` (parent) `{children: [ids]}` |
 | `link_tasks` | `linked` (blocked task) `{blocker_id, blocked_id}` |
 | `unlink_tasks` | `unlinked` (blocked task) `{blocker_id, blocked_id}` |
@@ -778,16 +778,16 @@ Fold a duplicate into the task that should survive.
 **`get_tree(root_id?, depth?, include_closed?)`**
 
 - `root_id` omitted: the forest of root tasks. `depth` 1 to 5, default 2. `include_closed` default `false`.
-- Returns nested nodes `{id, title, status?, recurring?, state?, children?, more?}`, where `recurring` is the mode of a recurring task and `more` counts descendants below the depth limit.
+- Returns `{tree: [nodes], truncated?}` of nested nodes `{id, title, status?, recurring?, state?, children?, more?}`, where `recurring` is the mode of a recurring task and `more` counts descendants not shown, whether below the depth limit or cut by the node limit. Roots are level 1.
 - At most 100 nodes; if cut, `truncated: true`. Order within a level: open before closed, then id.
 
 **`search_tasks(query?, status?, inbox_only?, limit?)`**
 
 - `status`: `open` (default), `closed` or `any`. `limit` 1 to 30, default 20.
 - `query` is matched with full-text search over title, description and notes. Split it into words, quote each one, and require all of them; if that finds nothing, retry requiring any of them. Never pass raw user text to `MATCH`. The index uses the `porter` tokenizer, so "spec" also finds "specs".
-- A query with no words left once punctuation and FTS syntax are removed (`"*"`, `"--"`) is `invalid`, with the hint to search for words from the title, or to omit `query` to list recent tasks.
-- With no `query`, lists by `updated_at`, newest first.
-- Returns `{results: [rows], total}`. Rows always include `status`.
+- A query with no words left once punctuation and FTS syntax are removed (`"*"`, `"--"`, `"_"`) is `invalid`, with the hint to search for words from the title, or to omit `query` to list recent tasks. A blank query (empty or only whitespace) counts as omitted.
+- With a `query`, results are ordered by relevance, then `updated_at`, newest first. With no `query`, lists by `updated_at`, newest first.
+- Returns `{results: [rows], total}`; both keys are always present. Rows always include `status`.
 
 ### 8.13 `get_candidates` — Phase 2
 
@@ -887,7 +887,7 @@ What each must contain:
 
 - `mcp/server.py::build_server` registers every tool. A tool function does three things: accept arguments, call one `Orchard` method, return its dict. Wrap each with `guarded`.
 - **Tool descriptions** are read by the model on every turn. Each says, in at most about 80 words: when to use the tool, in the user's terms; and anything surprising about it. Parameter descriptions give one example value each.
-- Parameters use the wire forms of section 4: names for enumerated values, strings per section 3.2 for times. Annotate with `Literal[...]` so the schema lists the choices.
+- Parameters use the wire forms of section 4: names for enumerated values, strings per section 3.2 for times. Declare an enumerated parameter as a string whose schema lists the names as an `enum`, so the model sees the choices; not as `Literal[...]`, which FastMCP validates strictly, rejecting `"Must"` before `core` can match it leniently (section 13).
 - Declare read tools with `annotations={"readOnlyHint": True}`. The bookkeeping `roll_forward` does at the start of a read does not count against this.
 - `INSTRUCTIONS` tells the client to read the `overview` guide. From Phase 2, change it to: read the profile with `read_profile` at the start of a conversation, then the overview.
 - Each skill is also registered as an MCP prompt (already wired).
@@ -1048,3 +1048,14 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Transactions | Every transaction starts with `BEGIN IMMEDIATE`, so two clients on one file wait for each other instead of failing. Foreseeable failures are converted to `OrchardError` in `core`. |
 | Goose check | Deferred until the user has Goose installed; not a Phase 1 condition. |
 | Estimate ratio | Completions record where the estimate came from (`estimate_source_at_completion`). The pattern `ratio` uses only `guess` and `user` estimates, because estimates derived from past completions would feed the ratio back into itself. |
+| Enum names over MCP | Tool parameters for enumerated values are plain strings whose schema lists the names as an `enum`, not `Literal[...]`. FastMCP validates a `Literal` strictly and would reject `"Must"` before `core` sees it, defeating the lenient matching of 4.1. The model still sees the choices. |
+| Duplicates | A title is normalised by case-folding, collapsing whitespace and removing punctuation at either end. Items earlier in the same `capture_tasks` call count as existing tasks, so a brain-dump that repeats itself is flagged. At most three matches are reported per new item. |
+| Truncation | The 80- and 40-character limits include the trailing `…`. A `path` cut to three ancestors has four entries: `["…", great-grandparent, grandparent, parent]`. |
+| Search | Matches are ordered by relevance (`bm25`), then most recently updated. A blank `query` (empty or whitespace) is treated as no query; a query of only punctuation is `invalid`. `results` and `total` are always present, even when empty. |
+| Tree | `get_tree` returns `{tree: [nodes], truncated?}`, with one node when `root_id` is given. The roots are level 1, so `depth=1` shows the roots alone. The 100-node cut is breadth-first, so upper levels stay whole, and `more` counts every hidden descendant, whether hidden by `depth` or by the cut. A closed `root_id` is shown even when `include_closed` is false. |
+| `sources` | An entry for a field the call does not write is ignored. An entry naming a field that is not tracked is `invalid`, because it is almost always a typo that would otherwise record a user value as a guess. `firmness` is accepted as another name for `deadline`. |
+| Phase 1 rows | `motive` is the task's own motive, like `priority` and `due`, until Phase 2. Recurring rows already carry the stored part of `recurring` (`mode`, `cadence`, `gap_days`); the computed keys arrive in Phase 4. The detail shows `pattern` as `{id, name}` until the digest arrives in Phase 3. |
+| Event payloads | A deadline's wire value is `{at, firmness}` in `updated`, `conflict` and `skipped`. `description` and `notes` are logged by length (`{from_chars, to_chars}`), not copied into the log. Re-writing a field with the same value but a new source (the user confirming a guess) is a change, and is logged. |
+| Update rules | Moving an instance, and clearing `cadence` or `gap_days` on a task that is not recurring, are `unsupported` and `invalid` respectively. `notes` and `append_note` together, or `append_note` with `clear: ["notes"]`, is `invalid`. |
+| Links | A cycle's `path` starts with the edge being added, so the change reads first. `link_tasks` on an existing link returns the rows as well as `already_linked`. |
+| BEGIN IMMEDIATE | Python's `sqlite3` module runs a SELECT outside any transaction and issues its own `BEGIN` only before the first write, so a call's reads were never isolated from its writes. The engine turns that off and issues `BEGIN IMMEDIATE` itself; `test_concurrency.py` checks that a call holds the write lock from its first read. |

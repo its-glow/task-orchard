@@ -36,6 +36,10 @@ def make_engine(db_path: Path | str) -> sa.Engine:
 
     @sa.event.listens_for(engine, "connect")
     def _configure(dbapi_connection, _record) -> None:  # noqa: ANN001
+        # Stop the sqlite3 module managing transactions itself: it would run
+        # reads outside any transaction and BEGIN only before the first write.
+        # The "begin" listener below issues the BEGIN instead.
+        dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         # SQLite ignores foreign keys unless asked, per connection.
         cursor.execute("PRAGMA foreign_keys = ON")
@@ -43,6 +47,15 @@ def make_engine(db_path: Path | str) -> sa.Engine:
         cursor.execute("PRAGMA journal_mode = WAL")
         cursor.execute("PRAGMA busy_timeout = 5000")
         cursor.close()
+
+    @sa.event.listens_for(engine, "begin")
+    def _begin_immediate(connection: sa.Connection) -> None:
+        if connection.get_execution_options().get("isolation_level") == "AUTOCOMMIT":
+            return
+        # Take the write lock up front (SPEC section 10). Two processes on one
+        # file then wait for each other under busy_timeout, instead of one
+        # failing with "database is locked" when it moves from reading to writing.
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
 
     return engine
 
