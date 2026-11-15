@@ -57,7 +57,7 @@ tests/
 
 ## Rules
 
-- **Facts in the server, judgement in the agent.** No ranking formulas, no thresholds that decide what matters, no LLM calls. If you want to add a heuristic, it belongs in a skill. See SPEC section 1.
+- **Facts in the server, judgement in the agent, by default.** No LLM calls and no opaque weighted scoring. Simple server-side filtering and ordering is fine when it decides what to show, is stated in the spec, reports what it left out, and can be adjusted by a parameter. See SPEC section 1 for the test, and add anything new to the spec before building it.
 - **Derived state is never stored.** Blocked, dormant, candidate, effective priority, deadline and motive, and all statistics are computed on read. Do not add columns for them.
 - **Every mutation goes through `Orchard`**, inside `with self.tx() as tx:`, and writes its events with `record()` in that same transaction. SPEC section 6.4 lists exactly which events each operation writes.
 - **Time comes from `tx.now`.** Never call `datetime.now()`. Datetimes are aware UTC everywhere except `Task.recur_dtstart`.
@@ -74,7 +74,7 @@ tests/
 4. Review the generated file. Autogenerate does **not** see changes to CHECK constraints or to the full-text tables; write those by hand.
 5. `uv run pytest tests/test_schema.py` — fails if models and migrations disagree.
 
-Never edit a migration that has been released; add a new one. Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
+Never edit a migration once a real database has been created from it; add a new one. (The initial migration has been edited in place so far, because none has.) Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
 
 ## Things that will bite
 

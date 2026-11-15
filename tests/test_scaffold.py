@@ -17,7 +17,7 @@ from fastmcp.exceptions import ToolError
 
 from task_orchard.config import load_settings
 from task_orchard.core.clock import FixedClock
-from task_orchard.core.enums import EventType, Level, Priority, RecurMode, Status, TaskKind
+from task_orchard.core.enums import EventType, Level, Priority, RecurMode, Status
 from task_orchard.core.errors import CycleError, NotFound
 from task_orchard.core.events import record
 from task_orchard.core.service import Orchard
@@ -150,7 +150,8 @@ def test_seed_covers_every_shape(orchard: Orchard, seeded: dict[str, int]) -> No
         assert get("obs_backend").completion.actual_minutes == 150
 
         summary = get("summary")
-        assert summary.kind is TaskKind.RECURRING
+        assert summary.is_recurring
+        assert not get("summary_w3").is_recurring
         assert summary.recur_mode is RecurMode.SCHEDULED
         statuses = [get(f"summary_w{n}").status for n in range(4)]
         assert statuses == [Status.DONE, Status.MISSED, Status.DONE, Status.OPEN]

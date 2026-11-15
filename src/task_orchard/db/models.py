@@ -31,7 +31,6 @@ from task_orchard.core.enums import (
     Priority,
     RecurMode,
     Status,
-    TaskKind,
 )
 from task_orchard.db.types import IntEnumType, UTCDateTime, str_enum
 
@@ -82,11 +81,13 @@ class Task(Base):
 
     Three shapes share this table:
 
-    - an ordinary task (`kind = task`), which may have children;
-    - a recurring task (`kind = recurring`), which is never completed and whose
-      children are its instances;
-    - an instance: an ordinary task whose parent is a recurring task. Scheduled
+    - a plain task, which may have children;
+    - a recurring task: any task with `recur_mode` set. It is never completed,
+      and its children are its instances;
+    - an instance: a plain task whose parent is a recurring task. Scheduled
       instances carry `occurrence_at`, the slot they stand for.
+
+    There is no separate "kind" column: being recurring IS having a mode.
     """
 
     __tablename__ = "tasks"
@@ -115,10 +116,7 @@ class Task(Base):
         # Recurrence. coalesce() matters: a bare comparison with NULL yields NULL,
         # and a CHECK that evaluates to NULL passes.
         sa.CheckConstraint(
-            "(kind = 'recurring') = (recur_mode IS NOT NULL)", name="recurring_has_mode"
-        ),
-        sa.CheckConstraint(
-            "kind != 'recurring' OR "
+            "recur_mode IS NULL OR "
             "(deadline IS NULL AND occurrence_at IS NULL AND status IN ('open', 'dropped'))",
             name="recurring_shape",
         ),
@@ -138,7 +136,9 @@ class Task(Base):
             "coalesce(recur_mode, '') = 'flexible' OR gap_days IS NULL",
             name="gap_only_flexible",
         ),
-        sa.CheckConstraint("kind = 'recurring' OR cadence IS NULL", name="cadence_only_recurring"),
+        sa.CheckConstraint(
+            "recur_mode IS NOT NULL OR cadence IS NULL", name="cadence_only_recurring"
+        ),
         sa.CheckConstraint("gap_days IS NULL OR gap_days > 0", name="gap_positive"),
         sa.CheckConstraint("lead_minutes IS NULL OR lead_minutes >= 0", name="lead_not_negative"),
         # One instance per slot. This is what makes roll_forward safe to repeat.
@@ -149,7 +149,7 @@ class Task(Base):
             unique=True,
             sqlite_where=sa.text("occurrence_at IS NOT NULL"),
         ),
-        sa.Index("ix_tasks_status_kind", "status", "kind"),
+        sa.Index("ix_tasks_status", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -157,7 +157,6 @@ class Task(Base):
     description: Mapped[str | None] = mapped_column(sa.Text)
     notes: Mapped[str | None] = mapped_column(sa.Text)
 
-    kind: Mapped[TaskKind] = mapped_column(str_enum(TaskKind, "kind"), default=TaskKind.TASK)
     status: Mapped[Status] = mapped_column(str_enum(Status, "status"), default=Status.OPEN)
     parent_id: Mapped[int | None] = mapped_column(
         sa.ForeignKey("tasks.id", ondelete="RESTRICT"), index=True
@@ -202,6 +201,7 @@ class Task(Base):
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     # --- Recurring tasks only (SPEC section 7) ---
+    # Set exactly when the task is recurring. Null for a plain task.
     recur_mode: Mapped[RecurMode | None] = mapped_column(str_enum(RecurMode, "recur_mode"))
     # Free text read by the agent: "about every five days", "twice a week".
     cadence: Mapped[str | None] = mapped_column(sa.Text)
@@ -227,6 +227,10 @@ class Task(Base):
     children: Mapped[list[Task]] = relationship(back_populates="parent", order_by="Task.id")
     pattern: Mapped[Pattern | None] = relationship(back_populates="tasks")
     completion: Mapped[Completion | None] = relationship(back_populates="task", uselist=False)
+
+    @property
+    def is_recurring(self) -> bool:
+        return self.recur_mode is not None
 
     def __repr__(self) -> str:
         return f"<Task #{self.id} {self.status.value} {self.title!r}>"
