@@ -2,15 +2,18 @@
 
 Status: draft 4, 2026-11-14. Built from `INITIAL_PLAN.md` and five rounds of review.
 
+**Revised 2026-11-15: the app comes first.** The plan below was written with an MCP client as the way in. After Phases 1 and 2 were in use, that changed: Task Orchard gets its own assistant (the app), and MCP and REST become adapters built later. Section 12 gives the reasoning. Sections 1, 3, 6, 7, 9 and 10 have been brought into line; the task model in sections 4 and 5 is untouched.
+
 **This plan is now the design rationale.** The build document is `docs/SPEC.md`, which specifies every operation and is authoritative where the two differ; its section 13 lists what it refined. Phase 0 (scaffold and schema) is built. Your inline comments are folded into the sections they affect. Items marked **(default)** are my choices where nothing was said; section 11 lists what is still open.
 
 ## 1. Decisions
 
 | Topic | Decision |
 |---|---|
-| Where the AI lives | In the MCP client or agent. The server never calls an LLM. |
+| Where the AI lives | In a loop above the server: Task Orchard's own (the app), or an outside assistant's. The server itself never calls an LLM. (Revised; originally "in the MCP client or agent".) |
 | Hosting | One machine, SQLite file. HTTP access is added later without a rewrite. |
-| First client | A chat-style MCP client, not an autonomous agent. Goose is the working assumption. |
+| First client | The app: `task-orchard chat`, a terminal conversation with our own prompt, guides and choice of model. (Revised; originally a chat-style MCP client, with Goose as the working assumption.) |
+| MCP and REST | Adapters over the same operations as the app. MCP is for reaching tasks from another assistant; REST is for programs. Both are built out in Phase 6. |
 | "Not live yet" | One field, `snooze_until`, replaces both "care about date" and "snooze period". |
 | Own vs. effective values | A task stores its own priority and deadline. Effective priority and deadline are derived on every read and never stored, so removing a link reverts them immediately (section 5.3). |
 | Recurrence | Exactly one deterministic pattern (a calendar schedule). Every other kind of repetition is flexible and agent-guided (section 5.5). |
@@ -47,27 +50,32 @@ Status: draft 4, 2026-11-14. Built from `INITIAL_PLAN.md` and five rounds of rev
 ## 3. Architecture
 
 ```
-MCP client / agent (the model)          Android app (later)
-        │  tools + prompts                    │  REST
-        ▼                                     ▼
-   FastMCP adapter                      FastAPI adapter
-        └──────────────┬─────────────────────┘
-                 core service layer
-  (tasks, graph, shortlist, recurrence, history, memory)
-                       │
-                    SQLite
+ the app (our loop + a model)    another assistant       Android app (later)
+        │ in-process                  │ MCP                   │ REST
+        │                        FastMCP adapter         FastAPI adapter
+        └────────────┬────────────────┘                       │
+              tool catalogue                                  │
+                     └───────────────────┬────────────────────┘
+                               core service layer
+                (tasks, graph, shortlist, recurrence, history, memory)
+                                         │
+                                      SQLite
 ```
 
-- **Core** is a plain Python library with no MCP or HTTP imports. Both adapters are thin wrappers over it.
-- **No background process.** A `roll_forward(now)` step runs at the start of every request and handles everything time-driven (section 5.5).
+- **Core** is a plain Python library with no model, MCP or HTTP imports. Everything above it is a thin wrapper.
+- **The tool catalogue** defines each tool once. The app and the MCP adapter are both built from it.
+- **The app** is a short loop: send the conversation and the tools to a model, run what it asks for against core, repeat until it answers. It is where model calls happen, and it makes no judgement in code.
+- **No background process.** A `roll_forward(now)` step runs at the start of every request and handles everything time-driven (section 5.5). Unattended work in Phase 6 is a command the operating system's scheduler runs, not a daemon of ours.
 - **Time** is stored in UTC. The user's timezone is config. A date-only deadline means end of that day locally. Schedules are computed in local time so that Friday stays Friday across daylight-saving changes.
-- **Stack (default):** Python 3.12+, `uv`, SQLAlchemy 2 with Alembic migrations, Pydantic models at the boundary, SQLite FTS5 for search, FastMCP over stdio first, `pytest` with `hypothesis`. FastMCP moves quickly, so check its current docs when Phase 1 starts.
+- **Stack (default):** Python 3.12+, `uv`, SQLAlchemy 2 with Alembic migrations, Pydantic models at the boundary, SQLite FTS5 for search, the `anthropic` SDK for the app's model calls, FastMCP for the MCP adapter, `pytest` with `hypothesis`. FastMCP and the Claude API both move quickly, so check their current docs before using either.
 
 ```
 src/task_orchard/
   core/      graph, derived state, shortlist, recurrence, history, service
   db/        schema, migrations
-  mcp/       server, tools, prompts
+  tools.py   the tool catalogue (Phase 2A)
+  agent/     the app: prompt, loop, model, chat (Phase 2A)
+  mcp/       FastMCP adapter, prompts
   api/       FastAPI routes (Phase 6)
   skills/    one markdown source per skill
 tests/
@@ -249,7 +257,7 @@ Your objection to keeping every completion was about what the AI reads, not abou
 
 | Moment | Memory consulted |
 |---|---|
-| Session start | The charter and profile notes (the server's instructions tell the client to read them). |
+| Session start | The charter and profile notes. The app puts them in its prompt; an MCP client is told by the server's instructions to read them. |
 | Presenting options or planning a block | The balance, read against the charter. |
 | Triage of a new task | Matching patterns seed the estimate, activation and drain. So "do a performance review" starts out marked draining because the last ones were. |
 | Winnowing candidates | Profile notes; pattern digests of the shortlisted tasks. |
@@ -290,7 +298,9 @@ A task has about ten descriptive fields: priority, deadline and firmness, estima
 
 Over time the share of fields filled by `pattern` and `evidence` should rise and the number of questions should fall. Both are countable from `field_sources` and the event log, which gives a direct measure of whether the system is learning you.
 
-## 6. MCP tools
+## 6. Tools
+
+These are the operations a model can call. They are defined once and offered both by the app and over MCP.
 
 | Tool | Purpose |
 |---|---|
@@ -312,15 +322,15 @@ Over time the share of fields filled by `pattern` and `evidence` should rise and
 | `get_recent_activity` | Bounded feed of what happened in a period, plus the want / have-to balance. |
 | `find_patterns`, `save_pattern` | Look up digests; edit the `learned` note; merge two patterns. |
 | `read_profile`, `write_profile_note` | The charter and general user memory. |
-| `get_guide` | Returns a skill's text, for clients that do not surface MCP prompts. |
+| `get_guide` | Returns a skill's text, for MCP clients that do not surface MCP prompts. The app does not use it: its guides are in the prompt. |
 
-That is about two dozen tools, which is a context cost and a source of wrong picks for a small model. Where two tools prove to be always used together, they should be merged.
+That is about two dozen tools, which is a context cost and a source of wrong picks for a small model. Where two tools prove to be always used together, they should be merged. The cost is highest for an outside assistant that shares its context with other servers, so the merge is reviewed when the MCP adapter is built out in Phase 6.
 
 The three "give me tasks" stories: for the top task or a few options, the agent calls `get_candidates` with current state and picks one or several from the shortlist; everything urgent today is `get_critical(horizon=1 day)`.
 
 ## 7. Skills
 
-Each skill is one markdown file, reachable three ways from the same source: as an MCP prompt, through the `get_guide` tool, and as a `SKILL.md` folder for agent platforms that load skills. Whether Goose surfaces MCP prompts well enough is checked in Phase 1; `get_guide` works regardless.
+Each skill is one markdown file. The app puts every skill in its system prompt, so the model always has them. For other assistants the same file is reachable as an MCP prompt, through the `get_guide` tool, and as a `SKILL.md` folder for agent platforms that load skills; whether a given host makes use of any of those is up to the host.
 
 | Skill | What it does |
 |---|---|
@@ -330,7 +340,7 @@ Each skill is one markdown file, reachable three ways from the same source: as a
 | What now | Covers the three list stories; asks for current state only when it would change the answer; handles high-activation tasks; when giving several options, spreads them across want and have-to and says which is which. |
 | Plan time block | Given a block length, energy and constraints, pulls candidates and returns an ordered plan with buffers, using the balance and the charter to decide how much of the block goes to wants. |
 | Complete and reflect | Closes a task, collects the reflection, files the pattern, handles parent and recurrence checks. |
-| Morning plan, evening reflection | For agent deployments that check in. |
+| Morning plan, evening reflection | For unattended runs of the app, started by the system scheduler. |
 | Housekeeping | Runs mostly without you, on a small model: re-dates or clears soft deadlines that are long past, merges duplicates, flags untouched tasks, consolidates profile notes. Acts on clear cases, reports what it did, and saves judgement calls for the weekly review. |
 | Weekly review | With you: what went stale, what keeps being deferred or false-started, what to drop, reshape or recommit to. |
 
@@ -359,13 +369,14 @@ Each skill is one markdown file, reachable three ways from the same source: as a
 | 0. Scaffold | Project, schema, migrations, event `record()` helper, test harness, seeded demo database. | Run the test suite. |
 | 1. Tasks and graph | CRUD, parents, blockers, cycle check, derived states, candidate pool, FastMCP server with basic tools, `get_guide`. Check Goose's prompt support. | Capture tasks and ask what is available. |
 | 2. Prioritisation | Effective values with provenance (priority, deadline, motive), the shortlist with facts and reserved places, `get_critical`, the profile and charter. Triage and What-now skills. | Get ranked, explained suggestions. |
+| 2A. The app | The tool catalogue, our own loop with `task-orchard chat`, the MCP adapter rebuilt on the catalogue, and scenarios run against a real model. Added by the 2026-11-15 revision; numbered 2A so the later phases keep their numbers. | Use Task Orchard directly, with no MCP client. |
 | 3. Leading edge and completion | `subdivide_task`, parent check, completions, patterns (filing only), `start_task`, snooze, drop, reopen, untracked completion. Subdivide and Reflect skills. | Run a multi-step project end to end. |
 | 4. Recurrence | Scheduled mode with `roll_forward`; flexible mode with recurrence checks. | Track fixed obligations, chores and habits. |
 | 5. Learning and review | Pattern digests and their use in triage, review queue, recent activity with the balance, `merge_tasks`. Onboarding, Plan-time-block, Housekeeping and Weekly-review skills. Skill scenarios (section 10). Revisit logging of suggestions not chosen. | Plan a time block; see what it has learned; let it tidy itself. |
-| 6. HTTP and agent | MCP over HTTP with a token, FastAPI read routes, morning and evening skills, deployment notes for Hermes or OpenClaw. | Have an agent check in on you. |
-| 7. Android app | Sketch only: REST for views, a chat channel to the agent, reminders and timers. Planned in detail after Phase 6 has been lived with. | — |
+| 6. The service | One long-running process: FastAPI read routes with program-facing views, MCP over HTTP with a token and a review for outside assistants, the app over HTTP, unattended runs for housekeeping and the morning and evening skills. | Leave it running; have it tidy up and plan the day unasked. |
+| 7. Android app | Sketch only: REST for views, a chat channel to the app, reminders and timers. Planned in detail after Phase 6 has been lived with. | — |
 
-Phases 1–3 are the prototype. I'd suggest using it daily after Phase 3 before building further, because the agent's ranking and the breakdown skill are the parts most likely to feel wrong in practice.
+Phases 1–3, with 2A, are the prototype. I'd suggest using it daily after Phase 3 before building further, because the agent's ranking and the breakdown skill are the parts most likely to feel wrong in practice.
 
 ## 10. Testing
 
@@ -373,9 +384,9 @@ Phases 1–3 are the prototype. I'd suggest using it daily after Phase 3 before 
 - **Recurrence** as table tests with frozen time: early, late, long absence and the two-instance cap, pause and resume, daylight-saving change, month-end rules; `roll_forward` run twice changes nothing.
 - **Shortlist**: pressing tasks always make the cut; a filter hides a task only when the caller applied it, and reports how many; every fact in a row matches the underlying data.
 - **Event log**: every mutating service call produces exactly the events the spec lists for it, in the same transaction.
-- **Tools** exercised through an in-memory MCP client, including a check on response size.
-- **Skills** get a short manual script each, run against the seeded database in Goose, through Phase 4.
-- **Skill scenarios** from Phase 5: a seeded database plus a user message, with the expected tool calls and end state. Moving judgement to the agent moves the risk there too, and this is the only way to tell whether a cheaper model handles a skill well enough or needs a larger one.
+- **Tools** exercised through the catalogue's `call_tool`, including a check on response size. One module proves the MCP adapter exposes the same catalogue.
+- **The app's loop** tested with a scripted model: no test in the normal run calls a real one.
+- **Skill scenarios** from Phase 2A: a seeded database plus a user message, run through the app against a real model, with the expected tool calls and end state. Moving judgement to the agent moves the risk there too, and this is the only way to tell whether a cheaper model handles a skill well enough or needs a larger one. They replace the manual scripts in Goose that earlier drafts planned.
 
 ## 11. Still open
 
@@ -384,6 +395,32 @@ Nothing here blocks Phases 0–3.
 1. **What the charter says about balance.** Not a build question, but the reserved places and the balance only pay off once the charter states an intent. Onboarding can leave this blank and the weekly review can raise it once there is a month of data.
 2. **Whether activation and drain are the right axes.** Accepted for now. Revisit after a few weeks of use, when the completion reflections show whether the two are actually distinguishable in practice.
 3. **Whether `field_sources` earns its keep.** It is the one piece of bookkeeping added for the guess-first approach. If it proves fiddly, the fallback is a single "confirmed by user" flag per task.
-4. **Which model runs which skill.** Housekeeping, triage and pattern filing look safe on a small model. Collaborative breakdown of a vague project and time-block planning may not be. The skill scenarios in Phase 5 are how this gets answered; until then it is a guess.
+4. **Which model runs which skill.** Housekeeping, triage and pattern filing look safe on a small model. Collaborative breakdown of a vague project and time-block planning may not be. The skill scenarios are how this gets answered, and with our own loop the answer can be acted on: the app's model is a setting, and unattended runs get their own. Until Phase 5 completes the scenarios it is a guess.
 
 Deferred by agreement: logging suggestions that were not chosen (Phase 5), tuning when the agent closes parents unasked (later phase), calendar integration, the priority scale.
+
+## 12. Why the app comes first (2026-11-15)
+
+The original plan put the AI in an MCP client and treated the client as a free user interface. Two phases of use showed the cost of that.
+
+**The design describes an assistant, not a tool server.** It has a routine for the start of every conversation, guides to be read before each kind of job, a charter that is meant to govern how the user is treated, a question budget, a model sized to the work, and upkeep that runs with nobody present. An MCP server can ask a host for all of this and enforce none of it. Whether the profile is read, whether a guide is followed, and which model does the reading are the host's decisions. The parts of the product most likely to feel wrong in use, ranking and breakdown, were the parts we could neither control nor test.
+
+**What our own loop settles:**
+
+| Before | With the app |
+|---|---|
+| The server asks the host to call `read_profile` and read the overview at the start of each conversation. | The profile and every guide are in the system prompt. Nothing is fetched and nothing can be skipped. |
+| Guides are offered three ways because hosts differ in what they surface. | One way, always present. |
+| "Built for a small model" is a hope about whichever model the host runs. | The model is a setting, and can differ between conversation and unattended upkeep. |
+| Housekeeping and the morning and evening skills need an agent platform to run them. | They are runs of the app, started by the system scheduler. |
+| Skills are tested by hand, in a host, by reading what it did. | Scenarios run the real prompt and tools against a real model and assert on the calls and the end state. |
+| The server cannot see which suggestions the user was shown. | The loop can. |
+| The phone app needs "a chat channel to the agent", and there is no agent of ours for it to reach. | The app is that agent. |
+
+**What it costs.** Model calls are now ours to pay for and to get right. A terminal conversation has to be built, and later stored conversations and a chat endpoint. The loop is deliberately small to keep this in check: it holds no task logic and makes no judgement in code.
+
+**Why MCP stays.** It was never the wrong interface, only the wrong centre. It remains the way to reach your tasks from an assistant you are already working in, and to combine them with tools the app does not have, a calendar above all (section 1 keeps calendar integration out of scope on exactly that basis). Behaviour there is best-effort, since an outside assistant may ignore the guides.
+
+**Why this was cheap.** The layering held. `core` imports nothing from the adapter, and the adapter was a few hundred lines of pass-through, so nothing below the tool definitions changes. The posture of section 2 is untouched: the server computes facts and a model judges. What moved is who runs the model.
+
+**The alternative that was considered** was to go the other way and make Task Orchard a more conventional MCP server: no start-of-conversation routine, guidance carried inside tool results, half as many tools, and the server taking over whatever discipline the guides ask for. That is coherent, and it needs no loop or model bill of our own. It was not chosen because it gives up the parts of the original idea that are most its own: an assistant that follows a charter, keeps a question budget, learns the user and checks in. Several of its ideas are still worth having for the MCP adapter, and are listed under Phase 6 in the specification.

@@ -1,6 +1,6 @@
 # Task Orchard
 
-A single-user task and time management service with an MCP interface. The server stores tasks and computes facts; the model in the MCP client makes the judgements.
+A single-user task and time management service with its own AI assistant. The server (`core` and the database) stores tasks and computes facts; a model makes the judgements. That model is reached through **the app**, Task Orchard's own loop (`agent/`, Phase 2A), which is the primary way in. MCP (for other assistants) and REST (for programs) are adapters over the same operations and are built out in Phase 6.
 
 ## Documents, in order of authority
 
@@ -8,7 +8,9 @@ A single-user task and time management service with an MCP interface. The server
 2. `IMPLEMENTATION_PLAN.md` — why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
+Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done. **Next is Phase 2A, the app**: SPEC sections 10.1 to 10.3 say what it is, and section 11 gives the steps for moving from the MCP-first code and the tests. Then 3, 4, 5, 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
+
+The MCP adapter in `mcp/` works today and must keep working, but it is no longer where behaviour is designed or tested. Do no MCP-specific work before Phase 6 beyond what Phase 2A lists.
 
 ## Commands
 
@@ -28,7 +30,9 @@ TASK_ORCHARD_DB=/tmp/demo.db uv run task-orchard seed-demo   # a populated datab
 src/task_orchard/
   config.py          settings from the environment
   cli.py             task-orchard command
-  core/              all logic; imports nothing from mcp/ or api/
+  tools.py           the tool catalogue: one function per operation, call_tool (Phase 2A)
+  guides.py          loads skills (Phase 2A; today it is mcp/guides.py)
+  core/              all logic; imports nothing from tools, agent/, mcp/ or api/
     enums.py           every enumerated value (done)
     errors.py          OrchardError and friends (done)
     clock.py           the only source of "now" (done)
@@ -47,13 +51,22 @@ src/task_orchard/
     types.py           UTCDateTime, IntEnumType (done)
     engine.py          engine, sessions, init_db (done)
     migrations/        Alembic
+  agent/             the app: Task Orchard's own assistant (Phase 2A)
+    model.py           Model protocol, AnthropicModel; the only importer of anthropic
+    preamble.md        the fixed opening of the system prompt
+    prompt.py          builds the system prompt: preamble, guides, profile
+    loop.py            run_turn: the tool-use loop; MAX_STEPS
+    chat.py            task-orchard chat and ask
   mcp/
-    server.py          FastMCP adapter; Phase 1-2 tools done
-    guides.py          loads skills (done)
+    server.py          FastMCP adapter; Phase 1-2 tools done. Tool definitions
+                       move to tools.py in Phase 2A and this becomes generic
+    guides.py          loads skills (done; moves up a level in Phase 2A)
+  api/               REST routes (Phase 6)
   skills/              one markdown file per skill: overview, triage, what-now
   devtools/seed.py     demo data, addressed by handle
 tests/
   conftest.py          fixtures: orchard, clock, seeded, session
+  scenarios/           real-model checks, run with `pytest -m scenario` (Phase 2A)
 ```
 
 ## Rules
@@ -62,7 +75,10 @@ tests/
 - **Derived state is never stored.** Blocked, dormant, candidate, effective priority, deadline and motive, and all statistics are computed on read. Do not add columns for them.
 - **Every mutation goes through `Orchard`**, inside `with self.tx() as tx:`, and writes its events with `record()` in that same transaction. SPEC section 6.4 lists exactly which events each operation writes.
 - **Time comes from `tx.now`.** Never call `datetime.now()`. Datetimes are aware UTC everywhere except `Task.recur_dtstart`.
-- **Tools are thin.** An MCP tool takes arguments, calls one `Orchard` method, returns its dict, wrapped in `guarded`. No logic in `mcp/`.
+- **Tools are thin and defined once.** A tool takes arguments, calls one `Orchard` method and returns its dict. From Phase 2A it lives in `tools.py`, and the app and the MCP adapter are both built from that catalogue. No logic in `tools.py`, `agent/`, `mcp/` or `api/`.
+- **The app judges nothing in code.** `agent/` builds the prompt, sends the conversation and runs the tools the model asks for. Anything that looks like task logic belongs in `core`; anything that looks like judgement belongs in a guide.
+- **A session is append-only.** The app never edits, re-orders or drops a system prompt, tool list or message it has already sent (SPEC 10.2). Do not put the time or anything else that varies in the system prompt.
+- **Tests never call a model.** Use `ScriptedModel`. Scenarios are the one exception: they are marked `scenario`, excluded from the normal run, and cost money, so ask before running them.
 - **Errors are for the model to read.** Raise `OrchardError` subclasses with a `hint` that says what to do next.
 - **Responses are bounded.** Respect the limits in the spec; omit empty keys.
 - **Tests first.** Each phase lists its test modules and what they must prove. Write those, then the code. Use the `orchard` and `clock` fixtures; move the clock, never sleep.
@@ -81,6 +97,7 @@ Never edit a migration once a real database has been created from it; add a new 
 
 - **stdout belongs to MCP** when the server runs over stdio. Print diagnostics to stderr.
 - **FastMCP is at 4.x** here and changes quickly. Check its current documentation before using an API you remember from an older version. `tests/test_scaffold.py` shows the in-memory client pattern that works with the installed version.
+- **The Claude API changes quickly too.** Model ids, how thinking and effort are set, what a refusal looks like and how caching is marked have all changed recently. Read the current documentation (or the `claude-api` skill) before writing `agent/model.py`; do not write the request from memory.
 - **JSON has no "omitted" versus "null"** that clients agree on. That is why `update_task` unsets fields through an explicit `clear` list.
 - **A CHECK that compares with NULL passes.** Use `coalesce()` as `models.py` does.
 - **Never pass user text straight to an FTS `MATCH`.** Quote each word (SPEC 8.12).
