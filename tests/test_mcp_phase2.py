@@ -70,3 +70,16 @@ async def test_guides_are_prompts(orchard: Orchard) -> None:
     async with Client(build_server(orchard)) as client:
         names = {prompt.name for prompt in await client.list_prompts()}
     assert {"overview", "triage", "what-now"} <= names
+
+
+def test_every_guide_ships_and_stays_short() -> None:
+    """SPEC 9: each job guide under about 600 words. The overview explains the
+    ideas rather than one job, and is allowed a little more."""
+    guides = load_guides()
+    assert {
+        "overview", "triage", "what-now", "subdivide", "complete-and-reflect",
+        "onboarding", "plan-time-block", "housekeeping", "weekly-review",
+    } <= set(guides)  # fmt: skip
+    for name, guide in guides.items():
+        limit = 800 if name == "overview" else GUIDE_MAX_WORDS
+        assert len(guide.body.split()) <= limit, name
