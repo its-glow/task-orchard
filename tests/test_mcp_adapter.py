@@ -36,3 +36,22 @@ async def test_a_read_a_write_and_an_error_round_trip(orchard: Orchard) -> None:
             await client.call_tool("get_task", {"task_id": 999})
     problem = json.loads(str(caught.value))
     assert problem["error"] == "not_found" and problem["hint"]
+
+
+async def test_a_nested_input_schema_round_trips(orchard: Orchard) -> None:
+    """subdivide_task takes a list of objects, the first nested input schema."""
+    parent = orchard.create_task("Plan the party")["task"]["id"]
+    async with Client(build_server(orchard)) as client:
+        result = await client.call_tool(
+            "subdivide_task",
+            {
+                "parent_id": parent,
+                "children": [
+                    {"title": "Invite", "achievable": "Yes"},
+                    {"title": "Cake", "estimate_minutes": 30, "after": [1]},
+                ],
+            },
+        )
+    invite, cake = result.data["children"]
+    assert cake["blocked_by"] == [{"id": invite["id"], "title": "Invite"}]
+    assert cake["estimate_minutes"] == 30

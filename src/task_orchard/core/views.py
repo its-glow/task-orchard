@@ -272,6 +272,8 @@ def event_note(event: Event) -> str:
     elif event.type in (EventType.LINKED, EventType.UNLINKED):
         verb = "blocked by" if event.type is EventType.LINKED else "no longer blocked by"
         text = f"{verb} #{p.get('blocker_id')}"
+    elif event.type is EventType.REOPENED:
+        text = f"was {p.get('was', '?')}"
     elif event.type is EventType.CONFLICT:
         text = (
             f"kept {p.get('field')} = {_brief(p.get('kept'))}; "

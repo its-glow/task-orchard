@@ -251,7 +251,9 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         return orchard.unlink_tasks(blocker_id, blocked_id)
 
     @_tool
-    def start_task(task_id: Annotated[int, _p("The task being started, e.g. 12.")]) -> dict:
+    def start_task(
+        task_id: Annotated[int, _p("The task being started, e.g. 12.")],
+    ) -> dict[str, Any]:
         """Record that the user is starting work on a task now.
 
         Starts without a finish are a signal that something is hard to start,

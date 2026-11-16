@@ -330,3 +330,10 @@ def test_clock_events_are_not_touches(orchard: Orchard, stale: int) -> None:
         record(tx.session, EventType.SPAWNED, at=tx.now, task_id=stale, payload={})
         record(tx.session, EventType.MISSED, at=tx.now, task_id=stale, payload={})
     assert row(orchard, stale)["touched"] == "10 days ago"
+
+
+def test_reopened_reads_as_one_line_in_recent_events(orchard: Orchard) -> None:
+    task = make(orchard)
+    orchard.complete_task(task, reflection="A long reflection " * 20)
+    detail = orchard.reopen_task(task)["task"]
+    assert detail["recent_events"][0] == {"type": "reopened", "when": "now", "note": "was done"}
