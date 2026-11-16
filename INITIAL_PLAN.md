@@ -108,7 +108,7 @@ Task Orchard provides an MCP server. This serves a few purposes:
 - MCP invocation enables agent deployment, listed below
 - In the prototype phase, letting an existing MCP client handle interface is a useful shortcut
 
-It is expected that for basic usage, Task Orchard will be embedded in a simple MCP client (such as mcp-cli, crush, or goose) and the user will interface with it on the user’s schedule, terms, and prompting. For instance, the user would pop open a terminal window and be able to have a short conversation, updating tasks and getting their next priorities.
+It is expected that for basic usage, Task Orchard will be embedded in a simple MCP client (such as mcp-cli or crush) and the user will interface with it on the user’s schedule, terms, and prompting. For instance, the user would pop open a terminal window and be able to have a short conversation, updating tasks and getting their next priorities.
 
 ### Agent
 

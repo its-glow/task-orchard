@@ -125,7 +125,7 @@ N is rounded down. For a deadline that has passed, `rel` is `overdue by N days` 
 
 ### 3.4 Calendar days
 
-"Today" runs from local midnight to local midnight. "Within N days" in this document means within N × 24 hours of `now` unless it says "calendar days".
+"Today" runs from local midnight to local midnight. "Within N days" in this document means within N × 24 hours of `now` unless it says "calendar days". Every "within" includes its end: a task due in exactly 48 hours is within two days. That holds for `due_within_days`, `horizon_days`, `DUE_SOON_HOURS` and the at-risk window alike.
 
 **A snooze counted in days ends at the start of a day.** When a snooze is set by a number of days (`snooze_task(days=)`, or a flexible task's `gap_days`), it ends at local midnight at the start of the day that falls that many × 24 hours after the starting instant. A run finished on Monday evening with a gap of 2 is back on Wednesday morning, not Wednesday evening.
 
@@ -138,7 +138,7 @@ Day counts are whole numbers. A fraction would make this rule misbehave: half a 
 - Every tool returns one JSON object. Every object includes `now`: a stamp without `rel`. (`get_guide` is the one exception.)
 - **Enumerated values are exchanged by name**: `"high"`, `"must"`, `"soft"`. Numbers are never used for scales. Input names are matched leniently: case is ignored, surrounding whitespace is trimmed, and spaces and hyphens count as underscores, so `"Must"` and `" high "` are accepted. An unknown name raises `invalid` and lists the valid names.
 - **Empty keys are omitted.** A key whose value would be null, `[]`, `{}`, `false` or `0` is left out, unless this document says "always present".
-- Titles in rows are truncated to 80 characters with a trailing `…`. Titles inside nested references (`via`, `blocked_by`, `priority_via`, `path`, `parent`) are truncated to 40.
+- Titles in rows are truncated to 80 characters with a trailing `…`. Titles inside nested references (`via`, `blocked_by`, `priority_via`, `path`, `parent`) are truncated to 40. Both limits include the `…`.
 - Parameter names that take an id end in `_id` (`task_id`, `parent_id`, `pattern_id`), and the same names are used in `clear`.
 - Ids are integers. A parameter that takes several ids is a JSON array.
 
@@ -177,7 +177,7 @@ Used in every list. Built by `views.task_row`. Keys appear in this order; all ar
 | `id`, `title` | Always present. |
 | `status` | Omitted when `open`. |
 | `instance_of` | Id of the recurring parent, for instances. |
-| `path` | Titles of the nearest three ancestors, from the highest of them down to the parent, each truncated to 40 characters. When there are more than three, the first entry is `…`. Omitted for roots. |
+| `path` | Titles of the nearest three ancestors, from the highest of them down to the parent, each truncated to 40 characters. When there are more than three, the first entry is `…`, so the list has four entries. Omitted for roots. |
 | `priority` | Effective priority. Omitted when neither the task nor anything it inherits from sets one (section 5.4). |
 | `priority_via` | `{id, title, how}` when the effective priority is not the task's own. `how` is `"parent"` or `"blocks"`. |
 | `priority_own` | The task's own priority, only when it differs from the effective one. |
@@ -224,7 +224,9 @@ Returned by `get_task` and by every write that changes one task. Built by `views
 The tracked fields are those in `enums.TRACKED_FIELDS`: `priority`, `deadline` (which covers firmness), `estimate_minutes`, `activation`, `drain`, `motive`, `conditions`, `achievable`.
 
 - `create_task`, `update_task` and `subdivide_task` take an optional `sources` object: `{"deadline": "user", "estimate_minutes": "pattern"}`. A tracked field that is written without an entry is recorded as `guess`.
-- **Protection.** If a field's current source is `user` and the incoming source for it is not `user`, that field is left unchanged. The rest of the call still applies. The response lists each such field under `skipped`: `{field, kept, proposed, reason: "set by the user"}`. If the incoming source was `pattern` or `evidence`, a `conflict` event is also written (section 6.4).
+- An entry for a field the call does not write is ignored. An entry naming a field that is not tracked is `invalid`, because it is almost always a typo that would otherwise record a user value as a guess. `firmness` is accepted as another name for `deadline`.
+- Writing a field with the same value but a new source (the user confirming a guess) is a change, and is logged.
+- **Protection.** If a field's current source is `user` and the incoming source for it is not `user`, that field is left unchanged. The rest of the call still applies. The response lists each such field under `skipped`: `{field, kept, proposed, reason: "set by the user"}`, where a deadline's `kept` and `proposed` are `{at, firmness}`. If the incoming source was `pattern` or `evidence`, a `conflict` event is also written (section 6.4).
 - **Clearing is protected the same way.** A field named in `clear` counts as written with the source given for it in `sources`, `guess` if none. So clearing a `user` field needs `sources: {field: "user"}`; otherwise it is skipped and reported with `proposed: null`.
 - **A skip is impossible to miss.** Whenever `skipped` is present, the response also has a top-level `hint`: `Some fields were not changed because the user set them. If the user asked for this change, repeat the call with sources={"<field>": "user"}.` A small model relaying the user's own words would otherwise report a change that did not happen.
 - A successful clear removes the field's source entry.
@@ -253,7 +255,7 @@ Any operation that adds an edge (linking, moving to a new parent, creating with 
 
 1. Build the full edge set of 5.1 with the proposed change applied.
 2. Search for a cycle.
-3. If one exists, raise `cycle`. `details.path` is the loop as a list of `{id, title, status, because}`, where `because` is `"child of"`, `"blocks"` or `"blocks an ancestor of"` and describes the edge to the next entry. `status` is included because the loop may run through closed tasks the model has not seen in any list. The hint names `unlink_tasks`, which works on closed tasks too (section 8.5).
+3. If one exists, raise `cycle`. `details.path` is the loop as a list of `{id, title, status, because}`, starting with the edge being added so the change reads first, where `because` is `"child of"`, `"blocks"` or `"blocks an ancestor of"` and describes the edge to the next entry. `status` is included because the loop may run through closed tasks the model has not seen in any list. The hint names `unlink_tasks`, which works on closed tasks too (section 8.5).
 
 Building the whole graph per check is intended. It is obviously correct and the data is small.
 
@@ -287,7 +289,7 @@ Consequences worth stating:
 
 ### 5.4 Effective values
 
-All three are computed by memoised recursion along the edges of 5.1, which is safe because the graph is acyclic. Only open tasks take part; a closed task contributes nothing.
+All three are computed by memoised recursion along the edges of 5.1, which is safe because the graph is acyclic. Only open tasks take part; a closed task contributes nothing, and has nothing to inherit: its own row shows its own priority, deadline and motive.
 
 **Effective priority** of T is the highest of:
 
@@ -295,7 +297,7 @@ All three are computed by memoised recursion along the edges of 5.1, which is sa
 - the effective priority of T's parent;
 - the effective priority of every open task T effectively blocks.
 
-If none of these exists, the task has no effective priority: the key is omitted from rows, and wherever tasks are ordered or filtered by priority it counts as `normal`. The source is reported as `via`: the parent, or the blocked task that supplied the value (the explicitly blocked one, even when the value came up through its descendant). Ties prefer own, then parent.
+If none of these exists, the task has no effective priority: the key is omitted from rows, and wherever tasks are ordered or filtered by priority it counts as `normal`. The source is reported as `via`: the parent, or the blocked task that supplied the value (the explicitly blocked one, even when the value came up through its descendant). Ties prefer own, then parent, then blocked tasks in id order.
 
 **Effective deadline** is computed twice, once over all deadlines and once over hard deadlines only, giving `due` and `hard_due`. Each is the earliest of:
 
@@ -303,7 +305,7 @@ If none of these exists, the task has no effective priority: the key is omitted 
 - the effective deadline of T's parent;
 - for every open task B that T effectively blocks: B's effective deadline minus `remaining_minutes(B)`.
 
-Firmness and source travel with the winning value. `hard_due` is reported only when it is later than `due`.
+Firmness and source travel with the winning value; `via` and ties work exactly as for priority. `hard_due` is reported only when it is later than `due`.
 
 **Effective motive** is T's own motive, or else that of the nearest ancestor that has one. It does not travel through blocker links.
 
@@ -313,7 +315,7 @@ Required property (test it): removing a link or moving a task changes effective 
 
 - `remaining_minutes(T)`: if T has open children, the sum of `remaining_minutes` over them; otherwise T's `estimate_minutes`, or 0 if unset.
 - A deadline is **overdue** when it is in the past.
-- A deadline is **at risk** when it is not overdue and falls within the larger of 24 hours and `3 × W` from now. W is the work that has to fit before that deadline: `remaining_minutes` of the **highest ancestor of T, or T itself, that has the same effective deadline** in that pass.
+- A deadline is **at risk** when it is not overdue and falls within the larger of 24 hours and `3 × W` from now. W is the work that has to fit before that deadline: `remaining_minutes` of the **highest ancestor of T, or T itself, that has the same effective deadline** in that pass. That owner is found by walking up from T for as long as the parent's effective deadline in the same pass is the same instant.
   - When T inherits a project's deadline unchanged, W is the whole project's remaining work. A project due in three days with thirty hours of open work makes every one of its leaves at risk now, not on the last day.
   - When T's deadline is earlier than its parent's (its own, or pulled earlier through a blocker link), W is T's own remaining minutes.
 
@@ -377,7 +379,7 @@ All **leaves** (section 2), whether or not they are blocked, dormant or in the i
 
 Inbox tasks are included because spawned scheduled instances wait in the inbox until triaged (section 7.1), and one with a hard deadline must not go unseen. Captures rarely have a deadline or priority, so this adds little else. Such rows carry the `inbox` state flag.
 
-Ordered by `due` (none last), then effective priority, then id. At most 30 rows, with `omitted` if more. Rows include up to 5 open effective blockers as `blocked_by`, each with `via` when inherited, plus `blocked_by_more: n` if there are others. Explaining what stands in the way is the point of this tool, so this list is longer than a normal row's.
+Ordered by `due` (none last), then effective priority, highest first, then id. At most 30 rows, with `omitted` if more. Rows include up to 5 open effective blockers as `blocked_by`, each with `via` when inherited, plus `blocked_by_more: n` if there are others. Explaining what stands in the way is the point of this tool, so this list is longer than a normal row's.
 
 ## 6. History and memory
 
@@ -403,10 +405,11 @@ A digest is at most this fixed set of keys. It is the only form in which history
 
 ### 6.2 Profile and charter
 
-- One note per topic; topics compare without regard to case.
+- One note per topic; topics compare without regard to case. A topic is at most 100 characters, with spacing collapsed. A replaced note takes the topic's new spelling.
 - Topic `charter` is the charter. Limit 4,000 characters.
 - Every other note: limit 1,000 characters each, 8,000 in total.
 - A write that would exceed a limit raises `profile_full`, with the current sizes in `details` and the hint to consolidate existing notes first.
+- Writing the same text again, or deleting a topic that does not exist, changes nothing and writes no event.
 
 ### 6.3 The balance
 
@@ -445,7 +448,7 @@ Written only through `core.events.record()`, with `at = tx.now`. The table below
 | `roll_forward` | `spawned` (instance) `{recurring_id, occurrence_at}`; `missed` (instance) `{recurring_id, replaced_by}`, preceded by `dropped` `{reason: "instance missed", cascade_from}` for each of its open descendants; `resumed` (recurring) `{skipped_until}`; `dropped` (recurring) `{reason: "schedule ended"}` when its rule has no slots left (section 7.1) |
 | `set_timezone` | `settings_saved` (no task) `{timezone: {from, to}}` |
 
-`{from, to}` values use the wire form (names, stamps' `at` strings).
+`{from, to}` values use the wire form (names, stamps' `at` strings). A deadline's value is `{at, firmness}` wherever a payload carries one (`updated`, `conflict`).
 
 ### 6.5 The review queue (`get_review_queue`)
 
@@ -465,7 +468,7 @@ Items are **slim rows**: `{id, title, path?}` plus the keys the section names, n
 | `conflicts` | `conflict` events from the last 30 days on tasks that are still open: `{task: {id, title}, field, kept, proposed, source, when}`. |
 | `missed` | Per scheduled recurring task with instances missed in the last 30 days: `{recurring: {id, title}, missed: n, done: n}`. |
 
-A **normalised title** is lowercased, with every character that is not a letter or digit replaced by a space, and runs of spaces collapsed.
+A **normalised title** is case-folded, with runs of whitespace collapsed and punctuation removed from either end. `Call Mum!` and `call  mum` are equal; `call-mum` is a different title.
 
 ### 6.6 Recent activity (`get_recent_activity`)
 
@@ -601,7 +604,7 @@ Put things in the inbox with no questions asked.
 
 - `items`: 1 to 20 of `{title, notes?}`.
 - Creates each as an open, untriaged, root task.
-- Returns `{captured: [{id, title}], possible_duplicates: [{new_id, existing: {id, title}}]}`. A possible duplicate is an existing open task with the same normalised title.
+- Returns `{captured: [{id, title}], possible_duplicates: [{new_id, existing: {id, title}}]}`. A possible duplicate is an existing open task with the same normalised title (section 6.5). Items earlier in the same call count as existing tasks, so a brain-dump that repeats itself is flagged. At most three matches are reported per new item.
 
 ### 8.2 `create_task` — Phase 1 (recurrence in Phase 4)
 
@@ -662,8 +665,8 @@ A key given for the wrong mode is `invalid`.
 Change any stored field of a task.
 
 - `task_id`, then any of the `create_task` field parameters except `blocked_by` and `blocks`.
-- `append_note?`: text added to the end of `notes` on a new line.
-- `clear?`: array of field names to unset. Allowed: `description`, `notes`, `priority`, `deadline`, `snooze_until`, `estimate_minutes`, `activation`, `drain`, `motive`, `conditions`, `pattern_id`, `parent_id`, `cadence`, `gap_days`. These are the same names as the parameters that set them. A name that is also being set in the same call is `invalid`. Clearing a `user`-sourced field is protected (section 4.5).
+- `append_note?`: text added to the end of `notes` on a new line. Together with `notes`, or with `clear: ["notes"]`, it is `invalid`.
+- `clear?`: array of field names to unset. Allowed: `description`, `notes`, `priority`, `deadline`, `snooze_until`, `estimate_minutes`, `activation`, `drain`, `motive`, `conditions`, `pattern_id`, `parent_id`, `cadence`, `gap_days`. These are the same names as the parameters that set them. A name that is also being set in the same call is `invalid`, and so is clearing `cadence` or `gap_days` on a task that is not recurring. Clearing a `user`-sourced field is protected (section 4.5).
 - **Deadline and firmness.** Passing `firmness` alone changes the firmness of the existing deadline; with no deadline set it is `invalid`. Passing `deadline` alone keeps the existing firmness, or `soft` if there was no deadline. Clearing `deadline` clears its firmness.
 - `triaged?`: default `true`. So any update takes a task out of the inbox unless `triaged: false` is passed.
 - `recurrence?`: on a plain task, converts it (section 7.3). On a recurring task, a partial object changes only the keys given; `mode` cannot change.
@@ -671,7 +674,7 @@ Change any stored field of a task.
 Rules:
 
 - Omitted means unchanged. Unsetting is done only through `clear`.
-- Setting `parent_id` moves the task. The new parent must be open; the move is cycle-checked. Instances cannot be moved, and nothing can be moved under a recurring task this way.
+- Setting `parent_id` moves the task. The new parent must be open; the move is cycle-checked. Instances cannot be moved (`unsupported`), and nothing can be moved under a recurring task this way.
 - On a **closed** task only `description`, `notes`, `append_note` and `pattern_id` may change, and `triaged` is left as it is. Anything else is `not_open`.
 - Protected fields are skipped and reported (section 4.5).
 - Returns `{task, skipped?, hint?}`. A call that changes nothing returns the task and writes no event.
@@ -693,7 +696,7 @@ Returns `{parent: row, children: [rows]}`.
 ### 8.5 `link_tasks`, `unlink_tasks` — Phase 1
 
 - `blocker_id`, `blocked_id`.
-- `link_tasks`: both must be open; they must differ; the blocker must not be recurring; cycle-checked. Linking an existing link is not an error: returns `{already_linked: true}`.
+- `link_tasks`: both must be open; they must differ; the blocker must not be recurring; cycle-checked. Linking an existing link is not an error: the response adds `already_linked: true` to the two rows.
 - `unlink_tasks`: works whatever the status of either task, because links to closed tasks still count in the cycle check (section 5.2) and must be removable. Removing a link that does not exist returns `{was_linked: false}`.
 - Both return `{blocker: row, blocked: row}`, so the caller sees the new effective values.
 
@@ -788,14 +791,15 @@ Fold a duplicate into the task that should survive.
 
 - `root_id` omitted: the forest of root tasks. `depth` 1 to 5, default 2. `include_closed` default `false`.
 - Returns `{tree: [nodes], truncated?}` of nested nodes `{id, title, status?, recurring?, state?, children?, more?}`, where `recurring` is the mode of a recurring task and `more` counts descendants not shown, whether below the depth limit or cut by the node limit. Roots are level 1.
-- At most 100 nodes; if cut, `truncated: true`. Order within a level: open before closed, then id.
+- With `root_id`, `tree` holds that one node. A closed `root_id` is shown even when `include_closed` is false.
+- At most 100 nodes; if cut, `truncated: true`. The cut is breadth-first, so upper levels stay whole. Order within a level: open before closed, then id.
 
 **`search_tasks(query?, status?, inbox_only?, limit?)`**
 
 - `status`: `open` (default), `closed` or `any`. `limit` 1 to 30, default 20.
 - `query` is matched with full-text search over title, description and notes. Split it into words, quote each one, and require all of them; if that finds nothing, retry requiring any of them. Never pass raw user text to `MATCH`. The index uses the `porter` tokenizer, so "spec" also finds "specs".
 - A query with no words left once punctuation and FTS syntax are removed (`"*"`, `"--"`, `"_"`) is `invalid`, with the hint to search for words from the title, or to omit `query` to list recent tasks. A blank query (empty or only whitespace) counts as omitted.
-- With a `query`, results are ordered by relevance, then `updated_at`, newest first. With no `query`, lists by `updated_at`, newest first.
+- With a `query`, results are ordered by relevance (`bm25`), then `updated_at`, newest first. With no `query`, lists by `updated_at`, newest first.
 - Returns `{results: [rows], total}`; both keys are always present. Rows always include `status`.
 
 ### 8.13 `get_candidates` — Phase 2
@@ -818,13 +822,13 @@ The three narrowing filters exist so the agent can ask a sharper question when t
 ```json
 {"now": {...},
  "candidates": [ <rows with group, reserved?, over_energy?> ],
- "pool": {"total": 34, "shown": 20, "cut": {"due_soon": 0, "other": 14}},
+ "pool": {"total": 34, "shown": 20, "cut": {"pressing": 0, "due_soon": 0, "other": 14}},
  "filtered": {"too_long": 3, "conditions": 1},
  "conditions_in_pool": ["at-home", "business-hours", "good-weather"],
  "inbox": 3}
 ```
 
-`pool`, `inbox` and `conditions_in_pool` are always present, and the counts inside `pool` and `filtered` keep their zeros. `pool.total` counts candidates after filtering. `filtered` has one key per filter the caller applied (`outside`, `below_priority`, `not_due`, `too_long`, `conditions`) and none for the others. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
+`pool`, `inbox` and `conditions_in_pool` are always present, and the counts inside `pool` and `filtered` keep their zeros. `pool.total` counts candidates after filtering. `pool.cut` always has all three groups; a row displaced by a reserved want counts as cut in its group, so `total = shown + cut`. `filtered` has one key per filter the caller applied (`outside`, `below_priority`, `not_due`, `too_long`, `conditions`) and none for the others. `conditions_in_pool` lists every tag carried by a candidate before filtering, so the agent knows which conditions are worth asking the user about.
 
 ### 8.14 `get_critical` — Phase 2
 
@@ -854,7 +858,7 @@ In Phase 3 a digest contains the stored fields and the status counts only; the r
 
 ### 8.18 `read_profile`, `write_profile_note` — Phase 2
 
-**`read_profile()`** returns `{charter?: {text, updated}, notes: [{topic, text, updated}], size: {used, limit}}`. Notes are ordered by topic.
+**`read_profile()`** returns `{charter?: {text, updated}, notes: [{topic, text, updated}], size: {used, limit}}`. Notes are ordered by topic. `size` counts the notes other than the charter, against the 8,000-character total.
 
 **`write_profile_note(topic, text)`**: creates or replaces the note for that topic. Blank `text` deletes it. Limits per section 6.2. Returns the same shape as `read_profile`.
 
@@ -870,7 +874,7 @@ This is a tool of the MCP adapter only, for outside assistants that have no othe
 
 ## 9. Skills
 
-A skill is one markdown file in `src/task_orchard/skills/`, in the format the guide loader parses (`mcp/guides.py` today, `guides.py` from Phase 2A): a header with `name` and `description`, then the instructions. The app puts every guide in its system prompt (section 10.2). For outside assistants the same file is served as an MCP prompt and through `get_guide`. `overview.md`, `triage.md` and `what-now.md` exist.
+A skill is one markdown file in `src/task_orchard/skills/`, in the format the guide loader (`guides.py`) parses: a header with `name` and `description`, then the instructions. The app puts every guide in its system prompt (section 10.2). For outside assistants the same file is served as an MCP prompt and through `get_guide`. `overview.md`, `triage.md` and `what-now.md` exist.
 
 Rules for writing every skill:
 
@@ -879,13 +883,22 @@ Rules for writing every skill:
 - State what to do without asking and what to ask about.
 - Keep each under about 600 words.
 - **Write for both settings.** In the app the guides and the profile are already in the prompt; in an outside assistant they are not. So a guide never says "call `get_guide`" or "call `read_profile`" outright. It says "if the profile is not already in front of you, call `read_profile`", and names another guide as "the `subdivide` guide", leaving how it is reached to the setting.
+- **Mention a tool that does not exist yet conditionally** ("if you have `snooze_task`"), so a small model never calls a tool that is not there.
 - When a phase adds tools, update `overview.md` if a concept changed. The session-start routine lives in two places: the app's preamble (section 10.2) and `INSTRUCTIONS` in `mcp/server.py`. Change them only if that routine changes, and keep them in step.
+
+**The guess-first rules.** The user should rarely be asked for a field. `overview` and `triage` state these five rules, and every guide that fills in a task's fields follows them:
+
+1. **Guess first.** Fill every field from the title, the parent, matching patterns and the profile. Do not ask before guessing.
+2. **Ask only when the answer is both unclear and consequential.** A missing deadline on something that sounds date-bound is worth a question. The drain of "buy milk" is not.
+3. **Keep a question budget.** No questions at capture. At most one per task at triage, batched so several tasks are settled in one exchange. Larger questions wait for the weekly review.
+4. **Prefer questions that generalise**, and save the answer to the pattern or the profile so it is never asked again.
+5. **Say what was assumed, briefly,** when it matters. A correction from the user is cheaper than a question to them.
 
 What each must contain:
 
 | Skill | Phase | Required content |
 |---|---|---|
-| `triage` | 2 | Read the inbox (`search_tasks(inbox_only=true)`). For each task: guess every field from its wording, parent, `find_patterns` (from Phase 3) and the profile; write them with `update_task` and correct `sources`. The five rules of plan section 5.11, including the question budget: none at capture, at most one per task, batched across tasks. Spot recurring intent ("twice a week") and convert with `recurrence` (from Phase 4); for "the last day of the month" use `BYMONTHDAY=-1`. Spot duplicates from `possible_duplicates`. Spawned scheduled instances (rows with `instance_of`, from Phase 4) also land in the inbox: fill them like any task, using the parent and the previous occurrence (`get_task` on the parent shows its recent children), and do not ask the user about them. End by telling the user, in two or three lines, what was assumed. |
+| `triage` | 2 | Read the inbox (`search_tasks(inbox_only=true)`). For each task: guess every field from its wording, parent, `find_patterns` (from Phase 3) and the profile; write them with `update_task` and correct `sources`. The guess-first rules above, including the question budget: none at capture, at most one per task, batched across tasks. Spot recurring intent ("twice a week") and convert with `recurrence` (from Phase 4); for "the last day of the month" use `BYMONTHDAY=-1`. Spot duplicates from `possible_duplicates`. Spawned scheduled instances (rows with `instance_of`, from Phase 4) also land in the inbox: fill them like any task, using the parent and the previous occurrence (`get_task` on the parent shows its recent children), and do not ask the user about them. End by telling the user, in two or three lines, what was assumed. |
 | `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Narrow with `under_id`, `min_priority` or `due_within_days` when the user asks about one project, only important things, or a time window, or when `pool.cut` shows much was left out. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. A flexible recurring candidate (its row has `recurring`) is offered as itself ("go for a run?"); completing it records an occurrence. If `inbox` is above zero and the user has time, offer to triage first, since inbox tasks are never candidates. If the user declines an option as "not now", call `snooze_task`. When an offered task's soft deadline is long past, ask once whether to re-date it or clear it, so stale dates do not crowd the shortlist before housekeeping exists. |
 | `subdivide` | 3 | Read the task with `get_task`. Break down **one layer only**, into 2 to 7 children that are each achievable or clearly need their own breakdown later. Use `sequential` or `after` only where order is real. Act alone when the breakdown is obvious; otherwise propose it and ask. Never plan the whole tree. Stop after two levels in one turn. Call `subdivide_task` once. |
 | `complete-and-reflect` | 3 | Find the task first with `search_tasks(status="any")`; decide between existing, recurring and new (section 8.7). Ask one short question about how it went if the user did not say. Fill `actual_minutes`, `felt_activation`, `felt_drain` from their words. File a pattern: reuse when the match is clear, ask when not. For an occurrence of a recurring task, reuse the pattern its earlier occurrences were filed under; patterns are never assigned automatically. Handle `parent_check`: close or continue without asking when obvious, and say what was done. Handle `recurrence_check` (Phase 4). Update the pattern's `learned` note when the reflection teaches something general. |
@@ -913,14 +926,14 @@ the app (agent/)        MCP adapter (mcp/)       REST (api/, Phase 6)
 
 `src/task_orchard/tools.py` is the one place a tool is defined. The app and the MCP adapter are both built from it, so a tool is described once and the two cannot drift.
 
-- **One plain function per operation of section 8, with the same name.** A tool function does three things and nothing else: accept arguments, call one `Orchard` method, return its dict. The functions that exist today in `mcp/server.py` move here unchanged.
+- **One plain function per operation of section 8, with the same name.** A tool function does three things and nothing else: accept arguments, call one `Orchard` method, return its dict.
 - **`catalogue(orchard) -> list[Tool]`**, in the order of section 8. The order is fixed, because the app sends the list to the model in this order on every request (section 10.2). A `Tool` has:
 
   | Field | Content |
   |---|---|
   | `name` | The operation's name. |
   | `description` | The function's docstring. |
-  | `input_schema` | A JSON Schema object for the parameters, derived from the function's annotated signature with pydantic. The signature is the single source: nothing is written out twice. |
+  | `input_schema` | A JSON Schema object for the parameters, derived from the function's annotated signature with pydantic. The signature is the single source: nothing is written out twice. It has `additionalProperties: false`, titles dropped and `$defs` inlined, so the schema the app sends matches what FastMCP shows MCP clients. |
   | `read_only` | `true` for the operations that only read. The bookkeeping `roll_forward` does at the start of a read does not count against this. |
   | `fn` | The function. |
 
@@ -930,7 +943,7 @@ the app (agent/)        MCP adapter (mcp/)       REST (api/, Phase 6)
   |---|---|
   | An `OrchardError` | `payload` is the error JSON of section 4.2; `is_error` is true. |
   | No tool of that name | `invalid`, with the hint listing the tool names. |
-  | Arguments that do not fit the schema: a required one missing, a wrong type, a parameter that does not exist | `invalid`, with a hint naming the parameter and what it should be. Nothing is called. |
+  | Arguments that do not fit the schema: a required one missing, a wrong type, a parameter that does not exist | `invalid`, with a hint naming the parameter and what it should be. Nothing is called. Validation is pydantic's lax mode, as in the MCP adapter: `"30"` is accepted for a whole number, `"lots"` is not. |
 
   Anything else is a bug and propagates.
 - **Descriptions** are read by the model on every turn. Each says, in at most about 80 words: when to use the tool, in the user's terms; and anything surprising about it. Parameter descriptions give one example value each.
@@ -970,7 +983,7 @@ run_turn(session, user_text):
   | `max_tokens` | The reply's text, followed by `(The answer was cut off. Say "continue" for the rest.)` |
   | `refusal` | `The model declined to answer that.` |
 
-  Any other value (`stop_sequence`, `pause_turn`) is treated as `end`.
+  Any other value (`stop_sequence`, `pause_turn`, `model_context_window_exceeded`) is treated as `end`.
 - **Every tool call gets a result.** The API rejects a conversation in which a tool call is not followed by its result, and the append-only rule below means the call cannot be removed. A reply cut off by `max_tokens` can end part-way through a tool call, so when a turn ends on a reply that still holds tool calls, the loop appends one user message answering each of them with `is_error` and the payload `{"error": "not_run", "message": "This call was cut off and did not run.", "hint": "Call it again if it is still needed."}`. Nothing is run. Without this, every later turn of the session would fail.
 - **A user message may follow tool results.** When a turn ends at the step limit, or the model call fails, the conversation ends with a message of tool results, and the next turn's user message comes straight after it. The API joins consecutive user messages, so nothing special is done.
 - **If the model call itself fails** (network, credentials, rate limit after the SDK's own retries), the error is reported to the user and the turn ends. Nothing already appended is removed, including the results of tools that ran: those changes happened, and the model must still see them on the next turn.
@@ -990,10 +1003,10 @@ This is a hard rule and not a style choice. Current models tie their reasoning t
 
 Built once per session by `agent/prompt.py`, in this order:
 
-1. **The preamble**, `agent/preamble.md`: fixed text that takes over the job of the MCP adapter's `INSTRUCTIONS`. It says what Task Orchard is and that the model makes the judgements; that the guides below are its instructions and the one for a job is to be followed; that the profile below was current when the conversation started; that ids come only from tool results; that times are used as given and never calculated; and that an error's hint says how to correct the call. When the timezone was not detected, it ends with the warning `mcp/server.py` carries today.
+1. **The preamble**, `agent/preamble.md`: fixed text that takes over the job of the MCP adapter's `INSTRUCTIONS`. It says what Task Orchard is and that the model makes the judgements; that the guides below are its instructions and the one for a job is to be followed; that the profile below was current when the conversation started; that ids come only from tool results; that times are used as given and never calculated; and that an error's hint says how to correct the call. When the timezone was not detected, it ends with a warning. That text is `TIMEZONE_WARNING` in `config.py`, so the preamble and the MCP adapter's `INSTRUCTIONS` share it without importing each other.
 2. **The `overview` guide.**
 3. **Every other guide**, in name order, each under a heading `## Guide: <name>` followed by its description and body.
-4. **The profile**: the result of `read_profile()` as JSON, under the heading `## The user's profile`.
+4. **The profile**: the result of `read_profile()` as JSON, under the heading `## The user's profile`. Its `now` is left out: it would be the session's start time, and the current time already comes with each user message.
 
 Parts 1 to 3 are one block, identical for every session until a release changes a guide, and are marked for prompt caching. Part 4 is a second block after it. Nothing that varies between sessions may appear before part 4. The conversation is cached too (section 10.2, the model).
 
@@ -1001,7 +1014,7 @@ All guides go in, every time. They are short (section 9), and this removes both 
 
 #### The tools offered
 
-Every tool in the catalogue, in catalogue order, the same for the whole session. A guide written before a tool exists mentions it conditionally (section 13), so the model never calls a tool that is not there.
+Every tool in the catalogue, in catalogue order, the same for the whole session. A guide written before a tool exists mentions it conditionally (section 9), so the model never calls a tool that is not there.
 
 #### Two tiers
 
@@ -1030,25 +1043,25 @@ class Model(Protocol):
 
 `Reply` has `content` (the reply's blocks, opaque to the loop apart from text and tool calls), `stop` (`end`, `tool_use`, `max_tokens` or `refusal`) and `input_tokens` (everything the request sent, cached or not).
 
-- **`AnthropicModel`** uses the official `anthropic` SDK, a new dependency. It is the only module that imports it.
+- **`AnthropicModel`** uses the official `anthropic` SDK. It is the only module that imports it.
   - One `AnthropicModel` per tier: the model id comes from the tier's setting, and the effort from the table above.
   - Credentials are whatever the SDK finds for itself (`ANTHROPIC_API_KEY`, or a login profile). The app never reads, stores or prints a key.
   - One request per `respond`, not streamed, with `max_tokens` of 16,000.
-  - **Caching.** Besides the marker on the stable block of the system prompt, the request uses the API's automatic caching, so the conversation so far is cached for the next call. A turn of several tool calls then pays full price only for what each call added. Each model has a minimum length below which nothing is cached; the first real run (Phase 2A, step 7) confirms from the usage figures that the cache is read.
-  - **Refusals.** Where the model supports a server-side fallback on a refusal, it is turned on. Haiku 5.5 does not, so on the default settings a refusal ends the turn as above.
+  - **Caching.** Besides the marker on the stable block of the system prompt, the request uses the API's automatic caching, so the conversation so far is cached for the next call. A turn of several tool calls then pays full price only for what each call added. Each model has a minimum length below which nothing is cached; the first scenario run confirmed from the usage figures that the cache is read on Haiku 5.5.
+  - **Refusals.** Where the model supports a server-side fallback on a refusal, it is turned on. The models that do are a fixed list, `FALLBACK_MODELS` in `agent/model.py` (Opus 5.5 and 5, Sonnet 5.5, Fable 5.2 and 5.1), which needs updating when models change. Haiku 5.5 does not, so on the default settings a refusal ends the turn as above.
   - The request's exact shape (thinking, effort, cache markers, fallback) follows the current Claude API documentation. Check it before writing; do not work from memory. Whatever it needs stays inside this module.
 - **`ScriptedModel`**, in `tests/`, returns replies from a list and records what it was sent. Every test of the app uses it. The test suite never calls a model.
 
 #### `task-orchard chat` and `task-orchard ask`
 
 - **`task-orchard chat`** is a terminal conversation. Each line typed is a turn. The answer goes to stdout. One line per tool call goes to stderr as it happens, so the user can see what the model is doing: `-> get_candidates(minutes_available=30, energy="low")`, followed by ` !! <error code>` when the call failed.
-  - `/new` ends the session and starts another, which reads the profile again and starts on basic. `/strategic` and `/basic` switch tier. `/quit`, or end of input, exits.
-  - The tier and model in use are printed to stderr when a session starts and on each switch.
-  - `--transcript PATH` appends every message and tool outcome to that file as JSON lines.
+  - `/new` ends the session and starts another, which reads the profile again and starts on basic. `/strategic` and `/basic` switch tier. `/quit`, or end of input, exits. An unknown `/` command is answered with the list of commands.
+  - The tier and model in use are printed to stderr when a session starts and on each switch, as `[basic: claude-haiku-5-5]`.
+  - `--transcript PATH` appends every message and tool outcome to that file as JSON lines, each tagged with the session's number, since `/new` starts another in the same file.
 - **`task-orchard ask "<text>"`** runs one turn in a new session, prints the answer and exits: 0 on success, 1 if the model could not be reached.
-- With no usable credentials, both print how to supply them (set `ANTHROPIC_API_KEY`, or log in with the `ant` CLI) to stderr and exit 1, before asking for any input.
+- With no usable credentials, both print how to supply them (set `ANTHROPIC_API_KEY`, or log in with the `ant` CLI) to stderr and exit 1, before asking for any input or opening the database. The SDK builds a client without credentials and fails only at the first request, so both commands ask the SDK's own resolution whether it found a key, a token or a login profile.
 - Both open the database directly, as the MCP server does. No service needs to be running.
-- **`task-orchard mcp`** is added as the explicit name for the stdio MCP server. The bare command and `serve` keep meaning the same thing until Phase 6, so existing client configurations go on working.
+- **`task-orchard mcp`** is the explicit name for the stdio MCP server. The bare command and `serve` keep meaning the same thing until Phase 6, so existing client configurations go on working.
 
 #### Scenarios
 
@@ -1064,11 +1077,11 @@ A scenario checks that a real model, given the app's prompt and tools, does the 
 
 `src/task_orchard/mcp/`. It exists, with the Phase 1 and 2 tools over stdio, and stays working. It is not where behaviour is designed or tested (ground rule 7), and no phase before 6 does MCP-specific work beyond what is listed here.
 
-- **From Phase 2A it is generic.** `build_server` registers every tool in the catalogue with FastMCP: the same function, so the same name, description and schema, with `read_only` passed as `annotations={"readOnlyHint": True}`. Check the installed FastMCP's way of registering a function; `tests/test_scaffold.py` shows the client pattern that works with it. Each tool is wrapped so that an `OrchardError` becomes a tool error whose text is the JSON of section 4.2, as now.
+- **It is generic.** `build_server` registers every tool in the catalogue with FastMCP: the same function, so the same name, description and schema, with `read_only` passed as `annotations={"readOnlyHint": True}`. Each tool is wrapped so that an `OrchardError` becomes a tool error whose text is the JSON of section 4.2. `tests/test_scaffold.py` shows the client pattern that works with the installed FastMCP.
 - It therefore gains each later phase's tools with no further work. There are no per-phase MCP test modules after Phase 2; one module, `test_mcp_adapter.py`, proves the wiring (section 11).
 - `get_guide`, the MCP prompts (one per skill) and `INSTRUCTIONS` stay as they are. `INSTRUCTIONS` tells the client to read the profile with `read_profile` at the start of a conversation, then the `overview` guide.
 - Transport is stdio through Phase 5. Remember that stdout belongs to the protocol.
-- **What waits for Phase 6:** HTTP transport and a token, a review of the tool set and the responses for assistants that will not read the guides, and the check of how a given host (Goose or another) surfaces prompts and instructions.
+- **What waits for Phase 6:** HTTP transport and a token, a review of the tool set and the responses for assistants that will not read the guides, and the check of how a given MCP host surfaces prompts and instructions.
 - **Several processes, one file.** Before Phase 6, the app and each MCP client are separate processes on one SQLite file. A deferred transaction that reads and then writes can fail with "database is locked" in WAL mode, and `busy_timeout` does not help in that case. So every transaction starts with `BEGIN IMMEDIATE`, which takes the write lock up front and waits for it under `busy_timeout`. `roll_forward` may write on any call, so read calls take the lock too; with one user this costs nothing.
 
 ## 11. Phases and acceptance
@@ -1089,15 +1102,11 @@ From Phase 3 on, every phase also does these three things, which are not repeate
 
 Project, schema, migrations, clock, config, events helper, transaction wrapper, demo seed, MCP shell with `get_guide`. Tests: `tests/test_schema.py`, `tests/test_scaffold.py`.
 
-### Phase 1 — Tasks and graph
+### Phase 1 — Tasks and graph (done)
 
 Build: `timefmt`, `views`, `graph`, the predicates of `derive`, and `capture_tasks`, `create_task` (without recurrence), `update_task` (without recurrence), `link_tasks`, `unlink_tasks`, `get_task`, `get_tree`, `search_tasks`.
 
-Until Phase 2, rows show own priority and own deadline in place of effective ones.
-
-Other row keys arrive with the phase that computes them: `deferred`, `starts`, `touched` and `pattern` in Phase 3; the `recurring` block in Phase 4; `pattern.ratio` in Phase 5.
-
-State flags in Phase 1: `inbox`, `dormant`, `blocked`, `has_open_children`, and `overdue` judged on the task's own deadline. `at_risk` arrives in Phase 2 with section 5.5, and `overdue` then moves to the effective `due`.
+Some row keys arrive with the phase that computes them: `deferred`, `starts`, `touched` and `pattern` in Phase 3; the computed keys of the `recurring` block in Phase 4 (rows already carry its stored part: `mode`, `cadence`, `gap_days`); `pattern.ratio` in Phase 5. Until the digest arrives in Phase 3, the detail shows `pattern` as `{id, name}`.
 
 The seed already contains recurring tasks, so the predicates must handle them from Phase 1. Until Phase 4:
 
@@ -1106,7 +1115,7 @@ The seed already contains recurring tasks, so the predicates must handle them fr
 - a recurring task as a blocker is rejected from Phase 1 (`unsupported`, section 7.3), because that rule is permanent and needs nothing from Phase 4; being blocked is allowed;
 - reads treat a recurring task like any other task, and its instances behave as plain tasks.
 
-Every transaction begins with `BEGIN IMMEDIATE` from Phase 1 (section 10).
+Every transaction begins with `BEGIN IMMEDIATE` from Phase 1 (section 10.3).
 
 | Test module | Must prove |
 |---|---|
@@ -1118,7 +1127,7 @@ Every transaction begins with `BEGIN IMMEDIATE` from Phase 1 (section 10).
 | `test_mcp_phase1.py` | Each tool callable through the client; an error arrives as JSON with `error` and `hint`. |
 | `test_concurrency.py` | Two `Orchard` instances on one file, writing alternately and from two threads at once, never raise "database is locked". |
 
-### Phase 2 — Prioritisation
+### Phase 2 — Prioritisation (done)
 
 Build: effective values and section 5.5 in `derive`, `shortlist`, `get_candidates`, `get_critical`, `read_profile`, `write_profile_note`. Skills: `triage`, `what-now`.
 
@@ -1133,18 +1142,9 @@ Build: effective values and section 5.5 in `derive`, `shortlist`, `get_candidate
 
 Build: the tool catalogue (section 10.1), the app (section 10.2) with `task-orchard chat` and `task-orchard ask`, the generic MCP adapter (section 10.3), and the scenario harness with its first two scenarios.
 
-This phase adds no operation and changes no behaviour of `core`. There is no schema change, so no migration, and existing databases are untouched. The user's MCP client keeps working throughout, on the same command.
+This phase added no operation and changed no behaviour of `core`. There was no schema change, so no migration, and existing databases were untouched.
 
-**Moving from the MCP-first code.** In this order, with the tests for each step written first:
-
-1. **The catalogue.** Create `src/task_orchard/tools.py`. Move the twelve tool functions out of `_register_task_tools` in `mcp/server.py`, with their signatures, parameter descriptions and docstrings unchanged, along with the helpers they use (`_choice`, `_p`, the name types, `WHEN`, `CaptureItem`). Add `Tool`, `catalogue` and `call_tool`.
-2. **The guide loader.** Move `mcp/guides.py` to `src/task_orchard/guides.py`, since the app needs it and must not import from `mcp/`. Update the imports in `mcp/server.py`, `tests/test_scaffold.py` and `tests/test_mcp_phase2.py`.
-3. **The MCP adapter.** Reduce `mcp/server.py` to: `INSTRUCTIONS`, `get_guide`, the prompts, and a loop that registers each catalogue tool. `test_mcp_phase1.py` and `test_mcp_phase2.py` must pass with no edit beyond that one import line; that is the proof nothing an MCP client sees has changed.
-4. **Guides for both settings.** Reword the three existing guides by the rule in section 9: the "Guides" section of `overview.md`, and step 1 of `triage.md` and `what-now.md`.
-5. **The app.** `agent/model.py`, `agent/preamble.md`, `agent/prompt.py`, `agent/loop.py`, `agent/chat.py`. Add `anthropic` to the dependencies in `pyproject.toml`, and change the project description there, which still says "with an MCP interface".
-6. **The commands.** `chat`, `ask` and `mcp` in `cli.py`; `TASK_ORCHARD_MODEL_BASIC` and `TASK_ORCHARD_MODEL_STRATEGIC` in `config.py`.
-7. **Scenarios.** The `scenario` marker, the harness, and the two scenarios of section 10.2. With the user's go-ahead, run them once and report the result, including whether the usage figures show the cache being read.
-8. **The documents.** In `README.md`, make `task-orchard chat` the quick start and move the MCP client setup under "from another assistant". In `CLAUDE.md`, mark the new modules done.
+The tool functions moved out of `mcp/server.py` into the catalogue unchanged, and the guide loader moved up from `mcp/`. `test_mcp_phase1.py` and `test_mcp_phase2.py` passed with no edit beyond one import line, which is the proof that nothing an MCP client sees changed. Both scenarios pass on Haiku 5.5, with the prompt served from the cache.
 
 | Test module | Must prove |
 |---|---|
@@ -1208,19 +1208,19 @@ To be detailed before it starts; the shape is fixed. Through Phase 5 Task Orchar
 - **REST.** A FastAPI app in `src/task_orchard/api/`. Read routes only at first, each calling the same `Orchard` method as its tool: `GET /candidates`, `/critical`, `/tasks/{id}`, `/tree`, `/search`, `/review`, `/activity`, `/patterns`, `/profile`. Writes are added when the Android app needs them.
 - **REST answers are for programs, not for a model.** The rows and details of section 4 are shaped for a model's context: titles are cut, empty keys vanish, times are local with a relative phrase, and lists stop at 30. A client that draws a screen needs the opposite. So the REST routes get their own view builders beside `core/views.py`: full titles, instants as ISO 8601 with an offset, every key always present (null when unset), and paging on lists. The facts and their derivation are the same; only the presentation differs. How `Orchard` returns both forms without doing the work twice is the main design question for this phase.
 - **MCP for other assistants.** The adapter of section 10.3, served over FastMCP's HTTP transport from the same process, with the same token; stdio stays available as `task-orchard mcp`. Before it is offered more widely:
-  - review the tool count for a host that shares its context with other servers, and merge tools that are always used together (plan section 6);
+  - review the tool count for a host that shares its context with other servers, and merge tools that are always used together (plan section 10);
   - make sure each response carries the next-step hint an assistant needs when it has not read the guide, as `skipped` and `recurrence_check` already do;
-  - confirm in the user's host (Goose or another) that tools are callable, and note in `README.md` whether it surfaces MCP prompts and server instructions.
+  - confirm in the user's MCP host that tools are callable, and note in `README.md` whether it surfaces MCP prompts and server instructions.
 - **The app over HTTP.** A chat endpoint that runs the loop of section 10.2 for a remote client, which is what the Android app's conversation needs. It requires conversations to be stored between requests, and so a schema change.
 - **Unattended runs.** `task-orchard run <skill>` runs the app for one turn with nobody present, for `housekeeping`, `morning-plan` and `evening-reflection`. It uses the basic tier, or the strategic tier with `--strategic`. The run's final answer is stored as a report (a new table) and shown at the start of the next session. Task Orchard still starts nothing by itself: the operating system's scheduler (cron or a systemd timer) runs the command, and the deployment notes say how. Getting a report to the user without their opening a session is Phase 7.
 - **Agent platforms.** Hermes, OpenClaw or similar can connect over MCP and use their own scheduling in place of the unattended runs above. Deployment notes for one are written only if the user decides to run it.
 - **Backups.** Document a nightly `sqlite3 .backup` of the database file.
 
-The Android application (plan Phase 7) is outside this specification.
+The Android application (Phase 7, sketched in plan section 10) is outside this specification.
 
 ## 13. Refinements over the plan
 
-Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
+Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PLAN.md` or replace what an earlier draft of it said. The rules themselves are stated in the sections they belong to; this table records what was decided and why.
 
 | Topic | Refinement |
 |---|---|
@@ -1229,65 +1229,40 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Shortlist | Three plain groups (`pressing`, `due_soon`, `other`) in place of a single "at risk first" rule; three named constants. Three optional narrowing filters (`under_id`, `min_priority`, `due_within_days`) under the agent's control. |
 | Posture | "Facts in the server, judgement in the agent" is a default with a stated test for server-side heuristics (section 1), not a prohibition. |
 | Deferral vs. scheduling | `snooze_task` counts as a deferral; `update_task(snooze_until=)` does not. This keeps the resistance signal clean when the agent sets a recurring task's return time. |
-| Flexible instances | A flexible task has at most one open instance. |
+| Flexible instances | A flexible task has at most one open instance. Creating one under a sleeping flexible task wakes the task, so the new instance is not hidden by its parent's snooze. |
 | Early completion | Completing a scheduled task before its instance exists consumes the next slot. |
 | Rule frequency | Scheduled rules are daily at most. |
 | Capture | `capture_tasks` takes several items, for brain-dumps. |
-| Tool names | `save_pattern` replaces `update_pattern`; `drop_tasks` is plural. |
 | `update_task` | Unsetting is explicit, through `clear`, because JSON cannot distinguish "omitted" from "null" reliably across clients. |
 | Completion row | Stores the effective motive at completion, so the balance survives re-parenting. |
 | Closed status | `closed_at` records when the task was closed in the system; `completed_at` lives on the completion row, records when the work was done, and may be earlier. |
-| Bare days | A date with no time means end of day for a deadline, start of day for a snooze, and midday for a completion. |
-| Day-counted snoozes | End at local midnight, so a snoozed or resting task is back in the morning. |
 | At risk | Judged against the remaining work of the whole project that owns the deadline, not the single task's estimate, so a large project is flagged before its last day. |
 | Unset priority | A task with no priority of its own or inherited shows none, and is ordered as `normal`. |
 | Conflicts | Evidence that disagrees with a user-stated value is logged as a `conflict` event and surfaced in the review queue. |
 | Timezone | Read from the environment or the system, and from Phase 5 also from the database, where `set_timezone` stores it once the user confirms it. Precedence is in section 3.1. |
 | Event types | Not constrained in the database, so new types need no migration. |
-| No `kind` field | The plan's `kind` (`task` or `recurring`) is gone. It duplicated `recur_mode`, which was added later; a task is recurring exactly when it has a mode. |
-| `must` | The third motive is `must`, not the plan's `have_to`: `want`, `should`, `must` read as who is asking (the user, the user's own standard, someone else). The meaning is unchanged; a work project the user enjoys is still a `must`. |
-| Instances | A recurring task is a container. Its instances are ordinary new tasks: only the title is copied, priority and motive arrive by inheritance, and the rest is filled in the way any new task's fields are. Spawned scheduled instances wait in the inbox for triage, and `get_critical` includes inbox leaves so a deadline cannot go unseen. The plan's "instances copy the recurring task's own fields" is gone. |
+| No `kind` field | An early draft's `kind` field (`task` or `recurring`) is gone. It duplicated `recur_mode`, which was added later; a task is recurring exactly when it has a mode. |
+| `must` | The third motive is `must`, where early drafts had `have_to`: `want`, `should`, `must` read as who is asking (the user, the user's own standard, someone else). The meaning is unchanged; a work project the user enjoys is still a `must`. |
+| Instances | A recurring task is a container. Its instances are ordinary new tasks: only the title is copied, priority and motive arrive by inheritance, and the rest is filled in the way any new task's fields are. Spawned scheduled instances wait in the inbox for triage, and `get_critical` includes inbox leaves so a deadline cannot go unseen. An earlier draft had instances copy the recurring task's own fields. |
 | Achievable | A task with open or done children is never achievable. Adding a child by any route flips the parent to `no`, and setting `yes` on such a task is refused. Recurring tasks have no achievable value at all. |
-| Patterns | References only. Nothing is filed under a pattern automatically (the plan's automatic pattern per recurring task is gone), and nothing in the server derives a task's values from a pattern; the agent reads digests and decides. |
+| Patterns | References only. Nothing is filed under a pattern automatically (an earlier draft gave every recurring task one), and nothing in the server derives a task's values from a pattern; the agent reads digests and decides. |
 | Touched | Counts only events that show the user engaging with the task, and updates written with source `user`. Agent edits made on its own, and everything the clock does, are not touches, so tidying cannot hide staleness. |
 | Protection | `clear` is protected like a write, and any skip adds a top-level `hint` telling the agent how to apply a change the user asked for. |
 | Deadline and firmness | On update, `firmness` alone re-grades the existing deadline, and `deadline` alone keeps the existing firmness. |
 | Names | Id parameters end in `_id`, and `clear` uses the same names. Enum names are matched ignoring case, whitespace, spaces and hyphens. |
 | Cycle paths | Include each step's `status`, since loops may run through closed tasks; `unlink_tasks` works on closed tasks. |
-| Reserved wants | At most `limit // 3` places, so a request for one or two options returns the top of the order. |
 | Response budget | Nested titles are cut to 40 characters, `path` to three ancestors, list limits to 30, `get_critical` blockers to 5, and review-queue items are slim rows. |
-| Day counts | `snooze_task(days=)` and `gap_days` are whole numbers. |
 | Recurrence rules | `BYHOUR`, `BYMINUTE` and `BYSECOND` are rejected; a UTC `UNTIL` is converted to local time; a rule that runs out retires its task. A missed instance takes its open descendants with it. |
-| Flexible instances | Creating one under a sleeping flexible task wakes the task, so the new instance is not hidden by its parent's snooze. |
-| Leaf | One definition: open, not recurring, no open children. |
-| Duplicates | Pairs within one recurring family are not duplicates. |
 | Small additions | `merge_tasks` copies `pattern_id`; `drop_tasks` returns `unblocked`; `notes` is capped at 20,000 characters; a search with no words is `invalid`. |
 | Transactions | Every transaction starts with `BEGIN IMMEDIATE`, so two clients on one file wait for each other instead of failing. Foreseeable failures are converted to `OrchardError` in `core`. |
-| Goose check | Deferred until the user has Goose installed; not a Phase 1 condition. |
 | Estimate ratio | Completions record where the estimate came from (`estimate_source_at_completion`). The pattern `ratio` uses only `guess` and `user` estimates, because estimates derived from past completions would feed the ratio back into itself. |
 | Enum names over MCP | Tool parameters for enumerated values are plain strings whose schema lists the names as an `enum`, not `Literal[...]`. FastMCP validates a `Literal` strictly and would reject `"Must"` before `core` sees it, defeating the lenient matching of 4.1. The model still sees the choices. |
-| Duplicates | A title is normalised by case-folding, collapsing whitespace and removing punctuation at either end. Items earlier in the same `capture_tasks` call count as existing tasks, so a brain-dump that repeats itself is flagged. At most three matches are reported per new item. |
-| Truncation | The 80- and 40-character limits include the trailing `…`. A `path` cut to three ancestors has four entries: `["…", great-grandparent, grandparent, parent]`. |
-| Search | Matches are ordered by relevance (`bm25`), then most recently updated. A blank `query` (empty or whitespace) is treated as no query; a query of only punctuation is `invalid`. `results` and `total` are always present, even when empty. |
-| Tree | `get_tree` returns `{tree: [nodes], truncated?}`, with one node when `root_id` is given. The roots are level 1, so `depth=1` shows the roots alone. The 100-node cut is breadth-first, so upper levels stay whole, and `more` counts every hidden descendant, whether hidden by `depth` or by the cut. A closed `root_id` is shown even when `include_closed` is false. |
-| `sources` | An entry for a field the call does not write is ignored. An entry naming a field that is not tracked is `invalid`, because it is almost always a typo that would otherwise record a user value as a guess. `firmness` is accepted as another name for `deadline`. |
-| Phase 1 rows | During Phase 1, `motive` was the task's own motive, like `priority` and `due`; Phase 2 replaced all three with effective values. Recurring rows already carry the stored part of `recurring` (`mode`, `cadence`, `gap_days`); the computed keys arrive in Phase 4. The detail shows `pattern` as `{id, name}` until the digest arrives in Phase 3. |
-| Event payloads | A deadline's wire value is `{at, firmness}` in `updated`, `conflict` and `skipped`. `description` and `notes` are logged by length (`{from_chars, to_chars}`), not copied into the log. Re-writing a field with the same value but a new source (the user confirming a guess) is a change, and is logged. |
-| Update rules | Moving an instance, and clearing `cadence` or `gap_days` on a task that is not recurring, are `unsupported` and `invalid` respectively. `notes` and `append_note` together, or `append_note` with `clear: ["notes"]`, is `invalid`. |
-| Links | A cycle's `path` starts with the edge being added, so the change reads first. `link_tasks` on an existing link returns the rows as well as `already_linked`. |
+| Duplicates | A title is normalised by case-folding, collapsing whitespace and removing punctuation at either end. Items earlier in the same `capture_tasks` call count as existing tasks, so a brain-dump that repeats itself is flagged. Pairs within one recurring family are not duplicates. |
 | BEGIN IMMEDIATE | Python's `sqlite3` module runs a SELECT outside any transaction and issues its own `BEGIN` only before the first write, so a call's reads were never isolated from its writes. The engine turns that off and issues `BEGIN IMMEDIATE` itself; `test_concurrency.py` checks that a call holds the write lock from its first read. |
-| Closed tasks | Show their own priority, deadline and motive. Effective values are computed over open tasks only (5.4), so a closed task has nothing to inherit. |
-| `via` and ties | Effective deadlines report `via` the same way as priority: the immediate parent, or the explicitly blocked task even when the value came from its descendant. Ties prefer own, then parent, then blocked tasks in id order. |
-| Deadline owner | For "at risk", the owner is found by walking up from the task while the parent's effective deadline in the same pass is the same instant. |
-| Inclusive windows | Every "within" includes its end: `due_within_days`, `horizon_days`, `DUE_SOON_HOURS` and the at-risk window. A task due in exactly 48 hours is within two days. |
-| Shortlist counts | `pool.cut` always has all three groups, with zeros. A row displaced by a reserved want counts as cut in its group, so `total = shown + cut`. |
-| Critical order | Within the same `due`, higher effective priority comes first. |
-| Profile | `size` counts the notes other than the charter, against the 8,000-character total. Topics are at most 100 characters, with spacing collapsed. A replaced note takes the topic's new spelling. Writing the same text again, or deleting a topic that does not exist, writes no event. |
-| Guides and later tools | A guide written before a tool exists mentions it conditionally ("if you have `snooze_task`"), so a small model never calls a tool the server does not have. |
 | App first | The plan put the AI in an MCP client and made MCP the way in. In use, the design turned out to describe a whole assistant (a session-start routine, guides to follow, a charter that governs, a model sized to the job, unattended upkeep) and then to depend on a host it does not control to honour it. So Task Orchard now has its own loop, the app, and behaviour is designed and tested there. MCP and REST are adapters over the same operations, built out in Phase 6. Nothing in `core` changed. |
 | Phase 2A | The app is built before Phase 3, so that completing, snoozing and breaking down are first used through it. It is numbered 2A so that Phases 3 to 6 keep the numbers this document and the code already use. |
-| Tool catalogue | Tools are defined once, in `tools.py`, as plain functions with annotated signatures. The app and the MCP adapter are both generated from it. The plan had them defined inside the MCP server. |
-| MCP adapter | Generic from Phase 2A: it registers whatever the catalogue holds, so it keeps up with later phases at no cost, and is checked by one test module. Everything specific to MCP (HTTP, a token, tuning for hosts that skip the guides, the Goose check) waits for Phase 6, beside REST. |
+| Tool catalogue | Tools are defined once, in `tools.py`, as plain functions with annotated signatures. The app and the MCP adapter are both generated from it. Before Phase 2A they were defined inside the MCP server. |
+| MCP adapter | Generic from Phase 2A: it registers whatever the catalogue holds, so it keeps up with later phases at no cost, and is checked by one test module. Everything specific to MCP (HTTP, a token, tuning for hosts that skip the guides, the check of what a given MCP host surfaces) waits for Phase 6, beside REST. |
 | Guides in the prompt | The app puts every guide and the profile in its system prompt, in place of `get_guide` and the session-start `read_profile`. Guides are worded to hold in both settings. |
 | Append-only sessions | Within a session the app never edits, re-orders or drops what it has already sent. So the profile is read once per session, the time is carried in each user message and not in the system prompt, and a long session is ended with `/new`, not trimmed or summarised. |
 | Step limit | A turn is at most 12 model calls. This bounds one turn only; the user can say "continue". |
@@ -1296,13 +1271,7 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Caching | The stable part of the system prompt and the conversation so far are both cached, the second with the API's automatic caching. Every model call in a turn re-sends the whole conversation, so caching only the system prompt would leave most of the cost in place. |
 | Compaction and the agent side | Not used in Phase 2A: a long session ends with `/new`. Server-side compaction fits the append-only rule (the summary arrives as a block the loop appends like any other) and is the expected next step. It belongs with the wider work on how the app manages the model's context and choices, which is expected to grow: compaction, choosing guides per session, letting the model ask for the strategic tier. |
 | Model seam | The loop reaches a model only through the `Model` protocol. One module imports the vendor SDK, and tests use a scripted model. The loop is written by hand, not taken from an SDK helper, so that the append-only rule, the step limit and the transcript are in our code and testable. |
-| Scenarios | Run through the app's loop by `pytest -m scenario`, from Phase 2A, in place of the plan's manual scripts in Goose. They assert on tool calls and end state, are excluded from the normal run, and are never part of acceptance. |
-| REST views | REST routes do not return the model-facing rows of section 4, as the plan had it. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
+| Scenarios | Run through the app's loop by `pytest -m scenario`, from Phase 2A, in place of manual scripts run by hand in an MCP host. They assert on tool calls and end state, are excluded from the normal run, and are never part of acceptance. |
+| REST views | REST routes do not return the model-facing rows of section 4, as first planned. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
 | Unattended runs | In Phase 6, housekeeping and the morning and evening skills are runs of the app started by the operating system's scheduler. Task Orchard still has no background process of its own. An agent platform over MCP remains possible but is no longer the plan. |
 | Commands | `task-orchard mcp` names the stdio MCP server from Phase 2A. The bare command and `serve` keep running it until Phase 6, when `serve` becomes the HTTP service; that change is confirmed with the user first. |
-| Catalogue schemas | Built from each tool function's annotated signature with pydantic, with `additionalProperties: false`, titles dropped and `$defs` inlined, so the schema the app sends matches what FastMCP shows MCP clients. Validation is pydantic's lax mode, as in the MCP adapter: `"30"` is accepted for a whole number, `"lots"` is not. |
-| Timezone warning | The text lives in `config.py` (`TIMEZONE_WARNING`) so that the app's preamble and the MCP adapter's `INSTRUCTIONS` share it without importing each other. It now says to set `TASK_ORCHARD_TZ` "in the environment Task Orchard runs in", where it said "in this server's environment". |
-| Profile in the prompt | The profile block leaves out the `now` that every response carries: it would be the session's start time, and the current time already comes with each user message. |
-| Credentials check | The SDK builds a client without credentials and fails only at the first request. So `chat` and `ask` ask the SDK's own resolution whether it found a key, a token or a login profile, and exit with the help text before reading input or opening the database. |
-| Fallback models | Server-side fallback on a refusal is requested only for a fixed list of models known to support it (`FALLBACK_MODELS` in `agent/model.py`): Opus 5.5 and 5, Sonnet 5.5, Fable 5.2 and 5.1. The list needs updating when models change. |
-| Chat details | Unknown `/` commands are answered with the list of commands. The tier and model are shown on stderr as `[basic: claude-haiku-5-5]`. The transcript tags each line with the session's number, since `/new` starts another in the same file. The stop reason `model_context_window_exceeded` counts as `end`, as section 10.2 says of any unlisted reason. |

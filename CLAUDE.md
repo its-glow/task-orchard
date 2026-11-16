@@ -5,7 +5,7 @@ A single-user task and time management service with its own AI assistant. The se
 ## Documents, in order of authority
 
 1. `docs/SPEC.md` — the build document. What every operation does, with acceptance tests per phase. **Follow it.**
-2. `IMPLEMENTATION_PLAN.md` — why the design is what it is. Read once for context.
+2. `IMPLEMENTATION_PLAN.md` — the design rationale: why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
 Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation) and 2A (the app) are done. Next is Phase 3, then 4, 5, 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.3 describe the catalogue, the app and the MCP adapter.
@@ -76,7 +76,7 @@ tests/
 - **Derived state is never stored.** Blocked, dormant, candidate, effective priority, deadline and motive, and all statistics are computed on read. Do not add columns for them.
 - **Every mutation goes through `Orchard`**, inside `with self.tx() as tx:`, and writes its events with `record()` in that same transaction. SPEC section 6.4 lists exactly which events each operation writes.
 - **Time comes from `tx.now`.** Never call `datetime.now()`. Datetimes are aware UTC everywhere except `Task.recur_dtstart`.
-- **Tools are thin and defined once.** A tool takes arguments, calls one `Orchard` method and returns its dict. From Phase 2A it lives in `tools.py`, and the app and the MCP adapter are both built from that catalogue. No logic in `tools.py`, `agent/`, `mcp/` or `api/`.
+- **Tools are thin and defined once.** A tool takes arguments, calls one `Orchard` method and returns its dict. It lives in `tools.py`, and the app and the MCP adapter are both built from that catalogue. No logic in `tools.py`, `agent/`, `mcp/` or `api/`.
 - **The app judges nothing in code.** `agent/` builds the prompt, sends the conversation and runs the tools the model asks for. Anything that looks like task logic belongs in `core`; anything that looks like judgement belongs in a guide.
 - **A session is append-only.** The app never edits, re-orders or drops a system prompt, tool list or message it has already sent (SPEC 10.2). Do not put the time or anything else that varies in the system prompt.
 - **Tests never call a model.** Use `ScriptedModel`. Scenarios are the one exception: they are marked `scenario`, excluded from the normal run, and cost money, so ask before running them.
@@ -98,7 +98,7 @@ Never edit a migration once a real database has been created from it; add a new 
 
 - **stdout belongs to MCP** when the server runs over stdio. Print diagnostics to stderr.
 - **FastMCP is at 4.x** here and changes quickly. Check its current documentation before using an API you remember from an older version. `tests/test_scaffold.py` shows the in-memory client pattern that works with the installed version.
-- **The Claude API changes quickly too.** Model ids, how thinking and effort are set, what a refusal looks like and how caching is marked have all changed recently. Read the current documentation (or the `claude-api` skill) before writing `agent/model.py`; do not write the request from memory.
+- **The Claude API changes quickly too.** Model ids, how thinking and effort are set, what a refusal looks like and how caching is marked have all changed recently. Read the current documentation (or the `claude-api` skill) before changing `agent/model.py`; do not write the request from memory.
 - **JSON has no "omitted" versus "null"** that clients agree on. That is why `update_task` unsets fields through an explicit `clear` list.
 - **A CHECK that compares with NULL passes.** Use `coalesce()` as `models.py` does.
 - **Never pass user text straight to an FTS `MATCH`.** Quote each word (SPEC 8.12).
@@ -106,4 +106,4 @@ Never edit a migration once a real database has been created from it; add a new 
 
 ## When the spec is silent or looks wrong
 
-Do not guess silently. Choose the reading that best fits SPEC section 1, implement it, and add a row to SPEC section 13 saying what you decided and why. If the question changes behaviour the user would notice, stop and ask instead.
+Do not guess silently. Choose the reading that best fits SPEC section 1, implement it, state the rule in the section of the spec it belongs to, and add a row to SPEC section 13 saying what you decided and why. If the question changes behaviour the user would notice, stop and ask instead.

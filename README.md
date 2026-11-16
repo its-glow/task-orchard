@@ -21,7 +21,7 @@ There are three ways in, over the same service:
 | File | What it is |
 |---|---|
 | [`docs/SPEC.md`](docs/SPEC.md) | The feature specification: every operation, phase by phase, with acceptance tests. |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | The design and the reasoning behind it. |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | The design rationale: why it is built the way it is. |
 | [`INITIAL_PLAN.md`](INITIAL_PLAN.md) | The original idea. |
 | [`CLAUDE.md`](CLAUDE.md) | Working notes for whoever implements it. |
 
@@ -42,7 +42,7 @@ Leave out `TASK_ORCHARD_DB` to use your real database at the default path.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `TASK_ORCHARD_DB` | Path to the SQLite database file. | `~/.local/share/task-orchard/orchard.db` |
+| `TASK_ORCHARD_DB` | Path to the SQLite database file. | `$XDG_DATA_HOME/task-orchard/orchard.db`, which is normally `~/.local/share/task-orchard/orchard.db` |
 | `TASK_ORCHARD_TZ` | Your timezone as an IANA name, such as `Europe/London`. | `$TZ`, then the system timezone, else UTC. |
 | `TASK_ORCHARD_MODEL_BASIC` | The model for everyday conversation with the assistant. | `claude-haiku-5-5` |
 | `TASK_ORCHARD_MODEL_STRATEGIC` | The model for work that needs more thought, chosen with `chat --strategic` or `/strategic`. | `claude-haiku-5-5` |
@@ -96,7 +96,7 @@ Task Orchard is also a stdio MCP server, so an assistant you already use can rea
 }
 ```
 
-In Goose, run `goose configure`, choose *Add Extension*, then *Command-line Extension*, and give the same command (`uv run --directory /path/to/this/repo task-orchard mcp`) and environment variables. Configurations that leave out `mcp` keep working.
+Other MCP hosts take the same command (`uv run --directory /path/to/this/repo task-orchard mcp`) and environment variables through their own way of adding a command-line server. Configurations that leave out `mcp` keep working.
 
 Notes:
 
@@ -107,8 +107,8 @@ Notes:
 - **Testing one branch while another is being developed:** check the branch out in its own worktree and point the client there, so switching branches in the main checkout never changes the server under you.
 
   ```
-  git worktree add ../garden-app app-first
-  # then use --directory /path/to/garden-app
+  git worktree add ../task-orchard-stable <branch>
+  # then use --directory /path/to/task-orchard-stable
   ```
 
 ## Trying it with demo data
