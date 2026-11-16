@@ -1,7 +1,7 @@
 """Every enumerated value in Task Orchard.
 
 Values that the model reads or writes are always exchanged by *name* ("high",
-"have_to"), never by number. Ordered scales are stored as integers so that the
+"must"), never by number. Ordered scales are stored as integers so that the
 database can compare them; `label` and `parse` convert at the boundary.
 """
 
@@ -68,9 +68,11 @@ class Achievable(StrEnum):
 
 
 class Motive(StrEnum):
+    """Why a task exists: the user wants to, holds themselves to it, or someone requires it."""
+
     WANT = "want"
     SHOULD = "should"
-    HAVE_TO = "have_to"
+    MUST = "must"
 
 
 class RecurMode(StrEnum):
@@ -79,7 +81,7 @@ class RecurMode(StrEnum):
 
 
 class FieldSource(StrEnum):
-    """Where a descriptive field's value came from (SPEC section 4.3)."""
+    """Where a descriptive field's value came from (SPEC section 4.5)."""
 
     GUESS = "guess"
     PATTERN = "pattern"
@@ -121,14 +123,27 @@ class EventType(StrEnum):
     PATTERN_SAVED = "pattern_saved"
     PATTERNS_MERGED = "patterns_merged"
     PROFILE_SAVED = "profile_saved"
+    SETTINGS_SAVED = "settings_saved"
     # Changes made by roll_forward, with no caller behind them.
     SPAWNED = "spawned"
     MISSED = "missed"
 
 
-# Events written by the clock, not by the user or agent. They do not count as
-# "touching" a task (SPEC section 5.6).
-SYSTEM_EVENTS: frozenset[EventType] = frozenset({EventType.SPAWNED, EventType.MISSED})
+# Events that show the user engaging with a task, and so count as "touching" it
+# (SPEC section 5.6). An UPDATED event also counts, but only when at least one
+# change in it was written with source `user`; edits the agent makes on its own
+# (guesses, housekeeping) and everything the clock does are not touches.
+TOUCH_EVENTS: frozenset[EventType] = frozenset(
+    {
+        EventType.CREATED,
+        EventType.STARTED,
+        EventType.SNOOZED,
+        EventType.WOKEN,
+        EventType.SUBDIVIDED,
+        EventType.REOPENED,
+        EventType.COMPLETED,
+    }
+)
 
 
 class ErrorCode(StrEnum):

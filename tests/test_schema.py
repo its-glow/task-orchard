@@ -193,7 +193,7 @@ def test_out_of_range_scales_are_refused_twice_over(session: Session) -> None:
         pytest.param({}, id="bare task"),
         pytest.param(scheduled_fields(), id="scheduled recurring"),
         pytest.param(
-            {"recur_mode": RecurMode.FLEXIBLE, "gap_days": 2.5},
+            {"recur_mode": RecurMode.FLEXIBLE, "gap_days": 2},
             id="flexible recurring",
         ),
         pytest.param(

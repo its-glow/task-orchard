@@ -36,7 +36,7 @@ Be brief with the user. They came to offload thinking, not to fill in forms.
 - *activation*: how hard it is to start. A dreaded two-minute phone call is high.
 - *drain*: how much doing it takes out of the user.
 
-**Motive.** Why the task exists: `want` (the user wants to), `should` (self-imposed, nobody else is waiting), or `have_to` (an obligation). Wanted things are easily crowded out, so keep them in view.
+**Motive.** Why the task exists: `want` (the user wants to), `should` (self-imposed, nobody else is waiting), or `must` (someone else requires it). Wanted things are easily crowded out, so keep them in view.
 
 **Patterns.** A pattern is a kind of work the user does repeatedly, with a short note on what has been learned about it and figures on how it usually goes. Use patterns to guess well instead of asking.
 

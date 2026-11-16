@@ -116,7 +116,7 @@ def upgrade() -> None:
             sa.Enum(
                 "want",
                 "should",
-                "have_to",
+                "must",
                 name="motive",
                 native_enum=False,
                 create_constraint=True,
@@ -166,7 +166,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("last_spawned_slot", sa.DateTime(), nullable=True),
-        sa.Column("gap_days", sa.Double(), nullable=True),
+        sa.Column("gap_days", sa.Integer(), nullable=True),
         sa.Column("occurrence_at", sa.DateTime(), nullable=True),
         sa.CheckConstraint(
             "(status = 'open') = (closed_at IS NULL)", name=op.f("ck_tasks_closed_at_matches")
@@ -258,11 +258,24 @@ def upgrade() -> None:
         sa.Column("reflection", sa.Text(), nullable=True),
         sa.Column("estimate_at_completion", sa.Integer(), nullable=True),
         sa.Column(
+            "estimate_source_at_completion",
+            sa.Enum(
+                "guess",
+                "pattern",
+                "evidence",
+                "user",
+                name="estimate_source_at_completion",
+                native_enum=False,
+                create_constraint=True,
+            ),
+            nullable=True,
+        ),
+        sa.Column(
             "motive_at_completion",
             sa.Enum(
                 "want",
                 "should",
-                "have_to",
+                "must",
                 name="motive_at_completion",
                 native_enum=False,
                 create_constraint=True,

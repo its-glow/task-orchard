@@ -38,7 +38,8 @@ def _template_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
     engine = make_engine(path)
     init_db(engine)
     # Fold the write-ahead log into the main file so that copying one file is enough.
-    with engine.connect() as conn:
+    # A checkpoint cannot run inside a transaction, so this one runs without.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
     engine.dispose()
     return path
