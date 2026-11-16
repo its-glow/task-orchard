@@ -8,7 +8,7 @@ Goal: give the user a short, well-reasoned choice of what to do next, drawn from
 
 ## Steps
 
-1. Call `read_profile` if you have not this conversation. Follow the charter when ranking.
+1. If the user's profile is not already in front of you, call `read_profile`. Follow the charter when ranking.
 2. **Pick the tool.**
    - "What should I do?", "give me a few options" → `get_candidates`.
    - "Is anything urgent?", "what's on fire?" → `get_critical`. It also shows urgent work that is blocked, and what blocks it.

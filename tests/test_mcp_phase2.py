@@ -10,7 +10,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from task_orchard.core.service import Orchard
-from task_orchard.mcp.guides import load_guides
+from task_orchard.guides import load_guides
 from task_orchard.mcp.server import build_server
 
 PHASE_2_TOOLS = {"get_candidates", "get_critical", "read_profile", "write_profile_note"}

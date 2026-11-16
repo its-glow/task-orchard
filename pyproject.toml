@@ -1,11 +1,12 @@
 [project]
 name = "task-orchard"
 version = "0.1.0"
-description = "A task and time management service with an MCP interface. The server computes facts; the agent makes judgements."
+description = "A task and time management service with its own AI assistant. The server computes facts; the model makes judgements."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",
+    "anthropic>=2.8.0",
     "fastmcp>=4.2,<5",
     "pydantic>=2.6",
     "python-dateutil>=2.9",
@@ -34,7 +35,10 @@ packages = ["src/task_orchard"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-q"
+addopts = "-q -m 'not scenario'"
+markers = [
+    "scenario: calls a real model and costs money; run with `pytest -m scenario` (SPEC 10.2)",
+]
 
 [tool.ruff]
 line-length = 100

@@ -8,9 +8,10 @@ A skill is one markdown file with a small header:
     ---
     The instructions, written to the agent.
 
-The same file is served three ways (SPEC section 9): as an MCP prompt, through
-the get_guide tool, and (by copying the file) as a SKILL.md for agent
-platforms that load skills from disk.
+The app puts every guide in its system prompt (SPEC 10.2). For outside
+assistants the MCP adapter serves the same file as an MCP prompt and through
+the get_guide tool, and a copy of it works as a SKILL.md for agent platforms
+that load skills from disk (SPEC section 9).
 """
 
 from __future__ import annotations
