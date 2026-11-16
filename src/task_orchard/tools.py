@@ -85,7 +85,7 @@ class RecurrenceSpec(TypedDict):
 RECURRENCE = (
     'Makes it repeat. Calendar rule: {"mode": "scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", '
     '"due_time": "17:00"}. Anything looser: {"mode": "flexible", "cadence": "about every '
-    'five days", "gap_days": 5}.'
+    'five days", "gap_days": 5}. A recurring task takes no deadline, firmness or achievable.'
 )
 
 

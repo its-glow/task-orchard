@@ -2085,8 +2085,8 @@ def _reject_for_recurring(**given: Any) -> None:
     if bad:
         raise Invalid(
             f"A recurring task cannot have {', '.join(bad)}.",
-            hint="A recurring task is a container for occurrences. A scheduled task's "
-            "occurrences get their deadlines from its rule; set other values on an occurrence.",
+            hint=f"Call again without {', '.join(bad)}. A scheduled task's occurrences take "
+            "their deadline from its rule and their firmness from recurrence.firmness.",
         )
 
 
