@@ -16,13 +16,21 @@ BUILT = [
     "capture_tasks",
     "create_task",
     "update_task",
+    "subdivide_task",
     "link_tasks",
     "unlink_tasks",
+    "start_task",
+    "complete_task",
+    "snooze_task",
+    "drop_tasks",
+    "reopen_task",
     "get_task",
     "get_tree",
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "find_patterns",
+    "save_pattern",
     "read_profile",
     "write_profile_note",
 ]
@@ -32,6 +40,7 @@ READ_ONLY = {
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "find_patterns",
     "read_profile",
 }
 
@@ -131,7 +140,7 @@ def test_an_orchard_error_becomes_the_section_4_2_json(orchard: Orchard, tools: 
 
 
 def test_an_unknown_tool_is_invalid_and_lists_the_names(tools: list[Tool]) -> None:
-    outcome = call_tool(tools, "complete_task", {"task_id": 1})
+    outcome = call_tool(tools, "merge_tasks", {"source_id": 1, "into_id": 2})
     assert outcome.is_error
     assert outcome.payload["error"] == "invalid"
     assert "capture_tasks" in outcome.payload["hint"]
