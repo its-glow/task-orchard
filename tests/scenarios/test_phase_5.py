@@ -82,4 +82,11 @@ def test_triage_fills_in_the_inbox(orchard: Orchard, clock: FixedClock, seeded) 
         task = orchard.get_task(seeded[handle])["task"]
         assert "inbox" not in task.get("state", []), (handle, result.tool_calls)
     assert len(result.called("update_task")) >= 2, result.tool_calls
-    assert "drop_tasks" not in result.writes
+    # Running twice a week is already covered by "Go for a run". The guide says to
+    # treat it as a duplicate: asked about, then kept or dropped, never made into a
+    # second recurring task.
+    running = orchard.get_task(seeded["inbox_run"])["task"]
+    assert "recurring" not in running, result.tool_calls
+    assert not any(c.get("recurrence") for c in result.called("create_task")), result.tool_calls
+    for call in result.called("drop_tasks"):
+        assert [int(i) for i in call["task_ids"]] == [seeded["inbox_run"]], result.tool_calls
