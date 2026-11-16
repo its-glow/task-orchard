@@ -31,8 +31,10 @@ do with their time and energy. It stores and computes facts; you make the \
 judgements: what matters, how to break work down, what to suggest.
 
 How to work with it:
-- At the start of a conversation, call get_guide with name "overview" unless \
-you have already read it. It explains the concepts and lists the other guides.
+- At the start of a conversation, call read_profile: it holds the user's \
+charter (what they want from Task Orchard) and what is known about them. Then \
+call get_guide with name "overview" unless you have already read it. It \
+explains the concepts and lists the other guides.
 - Before a multi-step job (triage, breaking a task down, planning a block of \
 time, closing a task), call get_guide for that job and follow it.
 - Task ids are numbers that come from tool results. Never invent one.
@@ -306,3 +308,69 @@ def _register_task_tools(mcp: FastMCP, orchard: Orchard) -> None:
         an id before changing a task; never guess ids.
         """
         return orchard.search_tasks(query, status, inbox_only, limit)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @guarded
+    def get_candidates(
+        limit: Annotated[int, _p("How many options at most, 1 to 30, e.g. 20.")] = 20,
+        under_id: Annotated[int | None, _p("Only this task and what is under it, e.g. 4.")] = None,
+        min_priority: Annotated[
+            PriorityName | None, _p('Only this important or more: "high".')
+        ] = None,
+        due_within_days: Annotated[float | None, _p("Only overdue or due within, e.g. 7.")] = None,
+        minutes_available: Annotated[int | None, _p("Skip longer tasks, e.g. 45.")] = None,
+        exclude_conditions: Annotated[
+            list[str] | None, _p('Skip tasks needing, e.g. ["at-home"].')
+        ] = None,
+        energy: Annotated[
+            LevelName | None, _p('The user\'s energy now, e.g. "low". Marks, never hides.')
+        ] = None,
+        reserve_wants: Annotated[
+            int, _p("Places kept for things the user wants to do, 0 to 10.")
+        ] = 3,
+    ) -> dict[str, Any]:
+        """What could the user work on now? A shortlist of tasks that are free to start.
+
+        Rows come in groups (pressing, due_soon, other) and in a plain order;
+        you rank them. `pool` and `filtered` say what was left out. Inbox tasks
+        never appear: `inbox` counts them. For "is anything urgent?" use
+        get_critical, which also shows blocked work.
+        """
+        return orchard.get_candidates(
+            limit, under_id, min_priority, due_within_days, minutes_available,
+            exclude_conditions, energy, reserve_wants,
+        )  # fmt: skip
+
+    @mcp.tool(annotations=READ_ONLY)
+    @guarded
+    def get_critical(
+        horizon_days: Annotated[
+            float, _p("Also list what is due within this many days, e.g. 1.")
+        ] = 1,
+    ) -> dict[str, Any]:
+        """What is urgent, including work that is blocked, snoozed or in the inbox.
+
+        Lists single steps that are overdue, at risk of missing a deadline,
+        due soon, or critical, each with what stands in its way.
+        """
+        return orchard.get_critical(horizon_days)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @guarded
+    def read_profile() -> dict[str, Any]:
+        """The user's charter and what is known about them. Read at the start of a
+        conversation. When the charter and your instincts disagree, follow it."""
+        return orchard.read_profile()
+
+    @mcp.tool
+    @guarded
+    def write_profile_note(
+        topic: Annotated[str, _p('One word or two, e.g. "energy". "charter" is the charter.')],
+        text: Annotated[str, _p('The whole note, e.g. "Low energy after 3pm." Blank deletes it.')],
+    ) -> dict[str, Any]:
+        """Save something true of the user in general, so it is never asked again.
+
+        Replaces the whole note for that topic. Notes are short: 1,000
+        characters each, 8,000 in all; consolidate when full.
+        """
+        return orchard.write_profile_note(topic, text)

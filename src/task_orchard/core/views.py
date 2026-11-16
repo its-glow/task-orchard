@@ -19,13 +19,13 @@ from typing import TYPE_CHECKING, Any
 import sqlalchemy as sa
 
 from task_orchard.core import timefmt
-from task_orchard.core.enums import TRACKED_FIELDS, Achievable, EventType, Status
+from task_orchard.core.enums import TRACKED_FIELDS, Achievable, EventType, Firmness, Status
 from task_orchard.db.models import Event, Task
 
 if TYPE_CHECKING:
     from zoneinfo import ZoneInfo
 
-    from task_orchard.core.derive import Snapshot
+    from task_orchard.core.derive import Effective, Snapshot
 
 ROW_TITLE_CHARS = 80
 NESTED_TITLE_CHARS = 40
@@ -104,19 +104,35 @@ def _path(snap: Snapshot, task: Task) -> list[str]:
     return names
 
 
-def _due(task: Task, snap: Snapshot, tz: ZoneInfo) -> dict[str, Any] | None:
-    # Phase 1 shows the task's own deadline; Phase 2 replaces it with `due`.
-    if task.deadline is None:
+def _via(snap: Snapshot, found: Effective) -> dict[str, Any] | None:
+    if found.via is None:
         return None
-    return {
-        **timefmt.stamp(task.deadline, tz, snap.now, deadline=True),
-        "firmness": task.deadline_firmness.value,
-    }
+    return {**ref(snap.task(found.via)), "how": found.how}
+
+
+def _deadline(snap: Snapshot, found: Effective | None, tz: ZoneInfo) -> dict[str, Any] | None:
+    if found is None:
+        return None
+    return compact(
+        {
+            **timefmt.stamp(found.value, tz, snap.now, deadline=True),
+            "firmness": found.firmness.value,
+            "via": _via(snap, found),
+        }
+    )
 
 
 def task_row(
-    snap: Snapshot, task: Task, tz: ZoneInfo, *, always_status: bool = False
+    snap: Snapshot,
+    task: Task,
+    tz: ZoneInfo,
+    *,
+    always_status: bool = False,
+    blockers: int = ROW_BLOCKERS,
+    blocker_via: bool = False,
 ) -> dict[str, Any]:
+    """The row of SPEC 4.3. `blockers` and `blocker_via` widen `blocked_by`
+    for the critical list (5.8)."""
     now = snap.now
     row: dict[str, Any] = {"id": task.id, "title": truncate(task.title, ROW_TITLE_CHARS)}
     if always_status or task.status is not Status.OPEN:
@@ -124,21 +140,36 @@ def task_row(
     if snap.is_instance(task):
         row["instance_of"] = task.parent_id
     row["path"] = _path(snap, task)
-    row["priority"] = _label(task.priority)  # own, until Phase 2
-    row["due"] = _due(task, snap, tz)
+
+    priority = snap.effective_priority(task)
+    if priority is not None:
+        row["priority"] = _label(priority.value)
+        row["priority_via"] = _via(snap, priority)
+        if task.priority is not priority.value:
+            row["priority_own"] = _label(task.priority)
+    due = snap.effective_due(task)
+    row["due"] = _deadline(snap, due, tz)
+    if due is not None and due.firmness is not Firmness.HARD:
+        hard_due = snap.effective_due(task, hard=True)
+        if hard_due is not None and hard_due.value > due.value:
+            row["hard_due"] = _deadline(snap, hard_due, tz)
     row["estimate_minutes"] = task.estimate_minutes
     row["activation"] = _label(task.activation)
     row["drain"] = _label(task.drain)
-    row["motive"] = _label(task.motive)  # own, until Phase 2
+    motive = snap.effective_motive(task)
+    row["motive"] = None if motive is None else _label(motive.value)
     if not task.is_recurring and task.achievable is not Achievable.YES:
         row["achievable"] = task.achievable.value
     row["state"] = snap.state(task)
     if task.status is Status.OPEN and snap.dormant_by_own_snooze(task):
         row["snoozed_until"] = timefmt.stamp(task.snooze_until, tz, now)
     if task.status is Status.OPEN:
-        blockers = snap.effective_blockers(task)
-        row["blocked_by"] = [ref(snap.task(b)) for b, _ in blockers[:ROW_BLOCKERS]]
-        row["blocked_by_more"] = max(0, len(blockers) - ROW_BLOCKERS)
+        found = snap.effective_blockers(task)
+        row["blocked_by"] = [
+            compact({**ref(snap.task(b)), "via": ref(snap.task(v)) if blocker_via and v else None})
+            for b, v in found[:blockers]
+        ]
+        row["blocked_by_more"] = max(0, len(found) - blockers)
     row["unblocks"] = snap.unblocks(task)
     row["conditions"] = list(task.conditions or [])
     if task.is_recurring:

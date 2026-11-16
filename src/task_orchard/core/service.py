@@ -33,7 +33,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -41,7 +41,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from task_orchard.config import Settings
-from task_orchard.core import graph, recurrence, views, wire
+from task_orchard.core import graph, recurrence, shortlist, views, wire
 from task_orchard.core.clock import Clock, SystemClock
 from task_orchard.core.derive import Snapshot
 from task_orchard.core.enums import (
@@ -60,12 +60,13 @@ from task_orchard.core.errors import (
     NotFound,
     NotOpen,
     ParentClosed,
+    ProfileFull,
     Unsupported,
 )
 from task_orchard.core.events import record
-from task_orchard.core.timefmt import DayMeans, at_text, parse_when
+from task_orchard.core.timefmt import DayMeans, at_text, parse_when, stamp
 from task_orchard.db.engine import init_db, make_engine, make_session_factory
-from task_orchard.db.models import Pattern, Task, TaskBlock
+from task_orchard.db.models import Pattern, ProfileNote, Task, TaskBlock
 
 SKIP_HINT = (
     "Some fields were not changed because the user set them. If the user asked for this "
@@ -99,6 +100,14 @@ CLEARABLE = (
     "gap_days",
 )
 SEARCH_MAX = 30
+CANDIDATES_MAX = 30
+DUE_WITHIN_MAX_DAYS = 365
+HORIZON_MAX_DAYS = 30
+RESERVE_WANTS_MAX = 10
+CHARTER_MAX_CHARS = 4_000
+NOTE_MAX_CHARS = 1_000
+NOTES_TOTAL_MAX_CHARS = 8_000
+TOPIC_MAX_CHARS = 100
 SEARCH_MAX_WORDS = 20
 TREE_MAX_NODES = 100
 DUPLICATES_PER_ITEM = 3
@@ -949,6 +958,165 @@ class Orchard:
                 tx, {"results": results, "total": total}, keep=["results", "total"]
             )
 
+    # --- get_candidates, get_critical (8.13, 8.14) ---
+
+    def get_candidates(
+        self,
+        limit: int = 20,
+        under_id: int | None = None,
+        min_priority: str | None = None,
+        due_within_days: float | None = None,
+        minutes_available: int | None = None,
+        exclude_conditions: list[str] | None = None,
+        energy: str | None = None,
+        reserve_wants: int = 3,
+    ) -> dict[str, Any]:
+        _int_in_range(limit, "limit", 1, CANDIDATES_MAX)
+        _int_in_range(reserve_wants, "reserve_wants", 0, RESERVE_WANTS_MAX)
+        priority = (
+            None
+            if min_priority is None
+            else wire.parse_enum(Priority, min_priority, "min_priority")
+        )
+        level = None if energy is None else wire.parse_enum(Level, energy, "energy")
+        within = None
+        if due_within_days is not None:
+            within = timedelta(
+                days=_number_in_range(due_within_days, "due_within_days", 0, DUE_WITHIN_MAX_DAYS)
+            )
+        if minutes_available is not None:
+            wire.positive_int(minutes_available, "minutes_available")
+        excluded = None
+        if exclude_conditions is not None:
+            excluded = frozenset(wire.conditions(exclude_conditions))
+        with self.tx() as tx:
+            snap = Snapshot(tx.session, tx.now)
+            under = None
+            if under_id is not None:
+                root = self._task(tx, under_id)
+                under = frozenset([root.id, *snap.open_descendants(root.id)])
+            filters = shortlist.Filters(
+                under=under,
+                min_priority=priority,
+                due_within=within,
+                minutes_available=minutes_available,
+                exclude_conditions=excluded,
+            )
+            payload = shortlist.candidates(
+                snap, tx.tz, limit=limit, filters=filters, energy=level, reserve_wants=reserve_wants
+            )
+            return self._respond(
+                tx, payload, keep=["candidates", "pool", "conditions_in_pool", "inbox"]
+            )
+
+    def get_critical(self, horizon_days: float = 1) -> dict[str, Any]:
+        days = _number_in_range(horizon_days, "horizon_days", 0, HORIZON_MAX_DAYS)
+        with self.tx() as tx:
+            snap = Snapshot(tx.session, tx.now)
+            payload = shortlist.critical(snap, tx.tz, horizon=timedelta(days=days))
+            return self._respond(tx, payload, keep=["critical", "inbox"])
+
+    # --- read_profile, write_profile_note (8.18) ---
+
+    def _profile(self, tx: Tx) -> dict[str, Any]:
+        rows = tx.session.scalars(sa.select(ProfileNote).order_by(sa.func.lower(ProfileNote.topic)))
+        charter = None
+        notes = []
+        for note in rows:
+            entry = {"text": note.text, "updated": stamp(note.updated_at, tx.tz, tx.now)}
+            if _is_charter(note.topic):
+                charter = entry
+            else:
+                notes.append({"topic": note.topic, **entry})
+        used = sum(len(n["text"]) for n in notes)
+        return self._respond(
+            tx,
+            {
+                "charter": charter,
+                "notes": notes,
+                "size": {"used": used, "limit": NOTES_TOTAL_MAX_CHARS},
+            },
+            keep=["notes", "size"],
+        )
+
+    def read_profile(self) -> dict[str, Any]:
+        with self.tx() as tx:
+            return self._profile(tx)
+
+    def write_profile_note(self, topic: str, text: str | None) -> dict[str, Any]:
+        if not isinstance(topic, str) or not topic.strip():
+            raise Invalid("topic must be non-blank text.", hint='For example topic="energy".')
+        topic = " ".join(topic.split())
+        if len(topic) > TOPIC_MAX_CHARS:
+            raise Invalid(
+                f"topic is {len(topic)} characters; the limit is {TOPIC_MAX_CHARS}.",
+                hint="Use a short topic of a word or two, and put the detail in text.",
+            )
+        if text is not None and not isinstance(text, str):
+            raise Invalid("text must be text.", hint="Pass blank text to delete the note.")
+        text = (text or "").strip()
+        with self.tx() as tx:
+            s = tx.session
+            existing = s.scalar(sa.select(ProfileNote).where(ProfileNote.topic == topic))
+            if not text:
+                if existing is not None:
+                    s.delete(existing)
+                    record(
+                        s,
+                        EventType.PROFILE_SAVED,
+                        at=tx.now,
+                        payload={"topic": existing.topic, "deleted": True},
+                    )
+                return self._profile(tx)
+
+            # The current sizes, so the agent can see where to consolidate.
+            others = sum(
+                len(n.text)
+                for n in s.scalars(sa.select(ProfileNote))
+                if not _is_charter(n.topic) and n is not existing
+            )
+            charter = s.scalar(
+                sa.select(ProfileNote).where(ProfileNote.topic == ProfileNote.CHARTER_TOPIC)
+            )
+            sizes = {
+                "chars": len(text),
+                "charter_used": len(charter.text) if charter else 0,
+                "charter_limit": CHARTER_MAX_CHARS,
+                "note_limit": NOTE_MAX_CHARS,
+                "notes_used": others,
+                "notes_limit": NOTES_TOTAL_MAX_CHARS,
+            }
+            if _is_charter(topic):
+                if len(text) > CHARTER_MAX_CHARS:
+                    raise ProfileFull(
+                        f"The charter would be {len(text)} characters; the limit is "
+                        f"{CHARTER_MAX_CHARS}.",
+                        **sizes,
+                    )
+            else:
+                if len(text) > NOTE_MAX_CHARS:
+                    raise ProfileFull(
+                        f"That note would be {len(text)} characters; the limit is "
+                        f"{NOTE_MAX_CHARS} per note.",
+                        **sizes,
+                    )
+                if others + len(text) > NOTES_TOTAL_MAX_CHARS:
+                    raise ProfileFull(
+                        f"The notes would total {others + len(text)} characters; the limit is "
+                        f"{NOTES_TOTAL_MAX_CHARS}.",
+                        **sizes,
+                    )
+
+            if existing is None:
+                s.add(ProfileNote(topic=topic, text=text, created_at=tx.now, updated_at=tx.now))
+            elif existing.text == text and existing.topic == topic:
+                return self._profile(tx)
+            else:
+                existing.topic, existing.text, existing.updated_at = topic, text, tx.now
+            s.flush()
+            record(s, EventType.PROFILE_SAVED, at=tx.now, payload={"topic": topic})
+            return self._profile(tx)
+
 
 # --- Module helpers ---
 
@@ -1020,3 +1188,25 @@ def _fts_search(
         if len(words) == 1:
             break
     return [], 0
+
+
+def _is_charter(topic: str) -> bool:
+    return topic.strip().lower() == ProfileNote.CHARTER_TOPIC
+
+
+def _int_in_range(value: Any, param: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise Invalid(
+            f"{param} must be a whole number from {low} to {high}.",
+            hint=f"For example {param}={max(low, min(high, 3))}.",
+        )
+    return value
+
+
+def _number_in_range(value: Any, param: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not low <= value <= high:
+        raise Invalid(
+            f"{param} must be a number from {low} to {high}.",
+            hint=f"For example {param}=1 or {param}=0.5.",
+        )
+    return float(value)

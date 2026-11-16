@@ -8,13 +8,13 @@ A single-user task and time management service with an MCP interface. The server
 2. `IMPLEMENTATION_PLAN.md` — why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phases 0 (scaffold and schema) and 1 (tasks and graph) are done. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
+Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
 
 ## Commands
 
 ```
 uv sync                      # install
-uv run pytest                # all tests (about 25 seconds)
+uv run pytest                # all tests (about 30 seconds)
 uv run pytest tests/test_x.py -k name
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format
@@ -33,13 +33,13 @@ src/task_orchard/
     errors.py          OrchardError and friends (done)
     clock.py           the only source of "now" (done)
     events.py          record(): the only way to write an event (done)
-    service.py         Orchard: one method per operation (Phase 1 ops done)
+    service.py         Orchard: one method per operation (Phases 1-2 done)
     wire.py            reading arguments: lenient names, ids, sources (done)
     timefmt.py         parsing and formatting times        (done)
-    views.py           JSON row and detail builders        (done for Phase 1)
+    views.py           JSON row and detail builders        (done to Phase 2)
     graph.py           blocking graph and cycle checks     (done)
-    derive.py          Snapshot: predicates (done), effective values (Phase 2)
-    shortlist.py       get_candidates, get_critical        (Phase 2)
+    derive.py          Snapshot: predicates, effective values, at risk (done)
+    shortlist.py       get_candidates, get_critical; the 5.5 constants (done)
     history.py         counts, digests, balance, review    (Phases 3, 5)
     recurrence.py      roll_forward and friends            (Phase 4)
   db/
@@ -48,9 +48,9 @@ src/task_orchard/
     engine.py          engine, sessions, init_db (done)
     migrations/        Alembic
   mcp/
-    server.py          FastMCP adapter; Phase 1 tools done
+    server.py          FastMCP adapter; Phase 1-2 tools done
     guides.py          loads skills (done)
-  skills/              one markdown file per skill; overview.md exists
+  skills/              one markdown file per skill: overview, triage, what-now
   devtools/seed.py     demo data, addressed by handle
 tests/
   conftest.py          fixtures: orchard, clock, seeded, session
@@ -75,7 +75,7 @@ tests/
 4. Review the generated file. Autogenerate does **not** see changes to CHECK constraints or to the full-text tables; write those by hand.
 5. `uv run pytest tests/test_schema.py` — fails if models and migrations disagree.
 
-Never edit a migration once a real database has been created from it; add a new one. (The initial migration has been edited in place so far, because none has.) Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
+Never edit a migration once a real database has been created from it; add a new one. Real databases now exist (the user runs an MCP host from Phase 1), so `0001_initial_schema.py` is frozen: every schema change from here on is a new revision. Migrations must not import application types (the Alembic environment renders ours as plain SQLAlchemy types).
 
 ## Things that will bite
 
