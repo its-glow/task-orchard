@@ -41,7 +41,8 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from task_orchard.config import Settings
-from task_orchard.core import graph, history, recurrence, shortlist, views, wire
+from task_orchard.core import graph, history, shortlist, views, wire
+from task_orchard.core import recurrence as recur
 from task_orchard.core.clock import Clock, SystemClock
 from task_orchard.core.derive import Snapshot
 from task_orchard.core.enums import (
@@ -52,12 +53,15 @@ from task_orchard.core.enums import (
     Level,
     Motive,
     Priority,
+    RecurMode,
     Status,
 )
 from task_orchard.core.errors import (
     AlreadyOpen,
     CycleError,
     HasOpenChildren,
+    InstanceCap,
+    InstanceExists,
     Invalid,
     NotFound,
     NotOpen,
@@ -67,7 +71,14 @@ from task_orchard.core.errors import (
     Unsupported,
 )
 from task_orchard.core.events import record
-from task_orchard.core.timefmt import DayMeans, at_text, day_snooze_end, parse_when, stamp
+from task_orchard.core.timefmt import (
+    DayMeans,
+    at_text,
+    day_snooze_end,
+    parse_when,
+    relative,
+    stamp,
+)
 from task_orchard.db.engine import init_db, make_engine, make_session_factory
 from task_orchard.db.models import (
     LEARNED_MAX_CHARS,
@@ -86,9 +97,10 @@ CHILDREN_HINT = (
     "A task with children is not one step. Add a child for the remaining work, or complete "
     "this task."
 )
-RECURRING_LATER_HINT = (
-    "Recurring tasks cannot be changed by this version yet. Change one of its instances "
-    "instead, or leave it as it is."
+RECENT_COMPLETIONS = 5
+RECURRENCE_NOTE = (
+    "Adjust when this comes back with update_task(snooze_until=...), or create an instance "
+    "under it with its own deadline."
 )
 
 # Fields update_task may change on a closed task (SPEC 8.3).
@@ -188,7 +200,7 @@ class Orchard:
         """One operation, one transaction, with the clock caught up first."""
         now = self._clock.now()
         with self._session_factory() as session, session.begin():
-            recurrence.roll_forward(session, now, self.tz)
+            recur.roll_forward(session, now, self.tz)
             yield Tx(session=session, now=now, tz=self.tz)
 
     # --- Helpers ---
@@ -240,16 +252,6 @@ class Orchard:
                 step["because"] = because
             path.append(step)
         raise CycleError(path)
-
-    @staticmethod
-    def _reject_recurring_target(task: Task, doing: str) -> None:
-        # Phase 1-3: recurring tasks are read-only until Phase 4 (SPEC 11).
-        if task.is_recurring:
-            raise Unsupported(
-                f"Task {task.id} is recurring, so you cannot {doing} yet.",
-                hint=RECURRING_LATER_HINT,
-                task_id=task.id,
-            )
 
     @staticmethod
     def _open_parent(tx: Tx, parent: Task) -> None:
@@ -403,6 +405,32 @@ class Orchard:
                 for c in children
             ],
         }
+
+    @staticmethod
+    def _check_convertible(tx: Tx, task: Task, *, clearing_deadline: bool) -> None:
+        """A plain task can become recurring only in the shape of SPEC 7.3."""
+        problem = None
+        if task.children:
+            problem = "it has children"
+        elif task.parent_id is not None and tx.session.get(Task, task.parent_id).is_recurring:
+            problem = "it is an occurrence of a recurring task"
+        elif task.deadline is not None and not clearing_deadline:
+            problem = "it has a deadline"
+        elif tx.session.scalar(
+            sa.select(sa.func.count())
+            .select_from(TaskBlock)
+            .join(Task, Task.id == TaskBlock.blocked_id)
+            .where(TaskBlock.blocker_id == task.id, Task.status == Status.OPEN)
+        ):
+            problem = "it blocks other tasks, and a recurring task cannot be a blocker"
+        if problem is not None:
+            raise Invalid(
+                f"Task {task.id} cannot become recurring: {problem}.",
+                hint="A task can become recurring only when it is open, has no children, is "
+                "not an occurrence and blocks nothing. Clear a deadline in the same call with "
+                'clear=["deadline"]. Otherwise create a new recurring task.',
+                task_id=task.id,
+            )
 
     @staticmethod
     def _has_live_children(task: Task) -> bool:
@@ -587,12 +615,37 @@ class Orchard:
     ) -> dict[str, Any]:
         with self.tx() as tx:
             s = tx.session
-            if recurrence is not None:
-                raise Unsupported(
-                    "Recurring tasks cannot be created by this version yet.",
-                    hint="Create a plain task now; it can be made recurring later.",
-                )
             src = wire.sources(sources)
+            parent = None
+            if parent_id is not None:
+                parent = self._task(tx, parent_id, "parent task")
+                if parent.status is not Status.OPEN:
+                    raise ParentClosed(parent.id, parent.status.value)
+            instance_of = parent if parent is not None and parent.is_recurring else None
+            if instance_of is not None:
+                if recurrence is not None:
+                    raise Invalid(
+                        "A task under a recurring task is one of its occurrences, so it cannot "
+                        "be recurring itself.",
+                        hint="Leave recurrence out, or create the task somewhere else.",
+                    )
+                if instance_of.recur_mode is RecurMode.SCHEDULED:
+                    raise Unsupported(
+                        f"Task {instance_of.id} is scheduled: its occurrences are created on "
+                        "schedule.",
+                        hint="To record one done early, call complete_task with the recurring "
+                        "task's id. To change an occurrence, use update_task on it.",
+                        parent_id=instance_of.id,
+                    )
+                live = recur.open_instances(s, instance_of)
+                if live:
+                    raise InstanceExists(instance_of.id, live[0].id)
+                if title is None:
+                    title = instance_of.title
+            parsed = None
+            if recurrence is not None:
+                parsed = recur.parse_recurrence(recurrence, tx.tz)
+                _reject_for_recurring(deadline=deadline, firmness=firmness, achievable=achievable)
             values = self._parse_fields(
                 tx,
                 {
@@ -618,11 +671,6 @@ class Orchard:
                     hint="Pass deadline as well, or leave firmness out.",
                 )
 
-            parent = None
-            if parent_id is not None:
-                parent = self._task(tx, parent_id, "parent task")
-                self._open_parent(tx, parent)
-
             blocker_ids = wire.ids(blocked_by, "blocked_by")
             blocked_ids = wire.ids(blocks, "blocks")
             for bid in blocker_ids:
@@ -634,8 +682,16 @@ class Orchard:
                 blocked = self._task(tx, bid)
                 if blocked.status is not Status.OPEN:
                     raise NotOpen(bid, blocked.status.value, doing="block it")
+            if parsed is not None and blocked_ids:
+                raise Unsupported(
+                    "A recurring task cannot block other tasks.",
+                    hint="Leave blocks out. Once an occurrence exists, link that instead.",
+                )
 
             task = self._new_task(tx, values, src, parent_id=parent_id)
+            if parsed is not None:
+                recur.apply(task, parsed, tx.now, tx.tz, creating=True)
+                s.flush()
 
             links = [(b, task.id) for b in blocker_ids] + [(task.id, b) for b in blocked_ids]
             self._check_cycle(tx, add_blocks=links, set_parent={task.id: parent_id})
@@ -658,9 +714,28 @@ class Orchard:
                 )
             if parent is not None:
                 self._flip_parent_achievable(tx, parent)
+            sleeping = instance_of is not None and instance_of.snooze_until is not None
+            if sleeping and instance_of.snooze_until > tx.now:
+                # Choosing the next occurrence wakes a sleeping flexible task (SPEC 7.2).
+                before = at_text(instance_of.snooze_until, tx.tz)
+                instance_of.snooze_until = None
+                instance_of.updated_at = tx.now
+                record(
+                    s,
+                    EventType.UPDATED,
+                    at=tx.now,
+                    task_id=instance_of.id,
+                    payload={"changes": {"snooze_until": {"from": before, "to": None}}},
+                )
             s.flush()
             s.refresh(task)
-            return self._respond(tx, {"task": self._detail(tx, task)})
+            payload: dict[str, Any] = {"task": self._detail(tx, task)}
+            if task.recur_mode is RecurMode.SCHEDULED:
+                payload["next_slots"] = [
+                    stamp(slot, tx.tz, tx.now)
+                    for slot in recur.next_slots(task, task.last_spawned_slot, tx.tz)
+                ]
+            return self._respond(tx, payload)
 
     # --- update_task (8.3) ---
 
@@ -692,12 +767,6 @@ class Orchard:
         with self.tx() as tx:
             s = tx.session
             task = self._task(tx, task_id)
-            self._reject_recurring_target(task, "update it")
-            if recurrence is not None:
-                raise Unsupported(
-                    "Converting a task to recurring is not supported by this version yet.",
-                    hint="Leave the task as it is for now.",
-                )
             src = wire.sources(sources)
             to_clear = wire.names(clear, CLEARABLE, "clear")
             given = {
@@ -740,12 +809,28 @@ class Orchard:
                 blocked = sorted((passed | set(to_clear)) - CLOSED_EDITABLE)
                 if blocked:
                     raise NotOpen(task.id, task.status.value, doing=f"change {', '.join(blocked)}")
+            if recurrence is not None and task.status is not Status.OPEN:
+                raise NotOpen(task.id, task.status.value, doing="change its recurrence")
+            parsed = None
+            if recurrence is not None:
+                parsed = recur.parse_recurrence(recurrence, tx.tz, mode=task.recur_mode)
+            converting = parsed is not None and not task.is_recurring
+            recurring_after = task.is_recurring or converting
             for name in ("cadence", "gap_days"):
-                if name in to_clear:
+                applies = recurring_after and (
+                    name == "cadence"
+                    or (parsed.mode if converting else task.recur_mode) is RecurMode.FLEXIBLE
+                )
+                if name in to_clear and not applies:
                     raise Invalid(
-                        f"Task {task.id} is not recurring, so it has no {name}.",
-                        hint=f"Remove {name} from clear.",
+                        f"Task {task.id} has no {name} to clear.",
+                        hint=f"Remove {name} from clear. "
+                        "cadence belongs to recurring tasks, gap_days to flexible ones.",
                     )
+            if recurring_after:
+                _reject_for_recurring(deadline=deadline, firmness=firmness, achievable=achievable)
+            if converting:
+                self._check_convertible(tx, task, clearing_deadline="deadline" in to_clear)
 
             values = self._parse_fields(
                 tx, {k: v for k, v in given.items() if k not in ("append_note", "parent_id")}
@@ -782,6 +867,8 @@ class Orchard:
                     moving = True
 
             write = _Write()
+            recurrence_before = recur.describe(task, tx.tz) if task.is_recurring else None
+            snooze_before = task.snooze_until
             before_untracked = {
                 "title": task.title,
                 "snooze_until": views.wire_value("snooze_until", task, tx.tz),
@@ -865,6 +952,34 @@ class Orchard:
                     src.get("deadline", FieldSource.GUESS), write,
                 )  # fmt: skip
 
+            if converting and task.deadline is not None:
+                raise Invalid(
+                    f"Task {task.id} keeps its deadline because the user set it, so it cannot "
+                    "become recurring.",
+                    hint='If the user asked for this, repeat with sources={"deadline": "user"}.',
+                )
+            for name in ("cadence", "gap_days"):
+                if name in to_clear:
+                    setattr(task, name, None)
+            if parsed is not None:
+                if converting:
+                    task.achievable = Achievable.UNKNOWN
+                    task.field_sources.pop("achievable", None)
+                recur.apply(task, parsed, tx.now, tx.tz, creating=converting)
+            if task.is_recurring:
+                after = recur.describe(task, tx.tz)
+                if after != recurrence_before:
+                    write.changes["recurrence"] = {"from": recurrence_before, "to": after}
+            pause_event = None
+            if task.recur_mode is RecurMode.SCHEDULED and task.snooze_until != snooze_before:
+                if task.snooze_until is not None:
+                    pause_event = (
+                        EventType.PAUSED,
+                        {"until": at_text(task.snooze_until, tx.tz)},
+                    )
+                elif snooze_before is not None and snooze_before > tx.now:
+                    task.last_spawned_slot = max(task.last_spawned_slot, tx.now)
+                    pause_event = (EventType.RESUMED, {"skipped_until": at_text(tx.now, tx.tz)})
             after_untracked = {
                 "title": task.title,
                 "snooze_until": views.wire_value("snooze_until", task, tx.tz),
@@ -891,6 +1006,8 @@ class Orchard:
                 record(
                     s, EventType.UPDATED, at=tx.now, task_id=task.id, payload={"changes": changes}
                 )
+            if pause_event is not None:
+                record(s, pause_event[0], at=tx.now, task_id=task.id, payload=pause_event[1])
             for conflict in write.conflicts:
                 record(s, EventType.CONFLICT, at=tx.now, task_id=task.id, payload=conflict)
             if moving and new_parent is not None:
@@ -1058,7 +1175,11 @@ class Orchard:
             task = self._task(tx, task_id)
             if task.status is not Status.OPEN:
                 raise NotOpen(task.id, task.status.value, doing="start it")
-            self._reject_recurring_target(task, "start it")
+            if task.recur_mode is RecurMode.SCHEDULED:
+                raise Invalid(
+                    f"Task {task.id} is scheduled; its occurrences are what get worked on.",
+                    hint="Start its open occurrence instead (get_task shows its children).",
+                )
             record(tx.session, EventType.STARTED, at=tx.now, task_id=task.id, payload={})
             snap = Snapshot(tx.session, tx.now)
             return self._respond(
@@ -1179,7 +1300,8 @@ class Orchard:
                 task = self._task(tx, task_id)
                 if task.status is not Status.OPEN:
                     raise NotOpen(task.id, task.status.value, doing="complete it")
-                self._reject_recurring_target(task, "complete it")
+                if task.is_recurring:
+                    task = self._occurrence_to_complete(tx, task)
 
             before = Snapshot(s, tx.now)
             open_children = before.open_children.get(task.id, [])
@@ -1218,21 +1340,93 @@ class Orchard:
                 payload["actual_minutes"] = actual_minutes
             if pattern_id is not None or pattern_name is not None:
                 payload["pattern_id"] = task.pattern_id
+            recurring = None
+            if task.parent_id is not None:
+                recurring = s.get(Task, task.parent_id)
+                if not recurring.is_recurring:
+                    recurring = None
+            if recurring is not None:
+                payload["recurring_id"] = recurring.id
+                if recurring.recur_mode is RecurMode.FLEXIBLE and recurring.gap_days:
+                    recurring.snooze_until = day_snooze_end(when, recurring.gap_days, tx.tz)
+                    recurring.updated_at = tx.now
+                    payload["sleeping_until"] = at_text(recurring.snooze_until, tx.tz)
             record(s, EventType.COMPLETED, at=tx.now, task_id=task.id, payload=payload)
 
             after = Snapshot(s, tx.now)
             unblocked, more = self._unblocked(
                 tx, before, after, {task.id, *(d.id for d in dropped)}
             )
-            return self._respond(
-                tx,
-                {
-                    "completed": views.task_row(after, task, tx.tz),
-                    "parent_check": self._parent_check(tx, after, task.parent_id),
-                    "unblocked": unblocked,
-                    "unblocked_more": more,
-                },
+            response: dict[str, Any] = {
+                "completed": views.task_row(after, task, tx.tz),
+                "parent_check": self._parent_check(tx, after, task.parent_id),
+                "unblocked": unblocked,
+                "unblocked_more": more,
+            }
+            if recurring is not None and recurring.recur_mode is RecurMode.SCHEDULED:
+                upcoming = recur.next_slot(recurring, recurring.last_spawned_slot, tx.tz)
+                if upcoming is not None:
+                    response["next_slot"] = stamp(upcoming, tx.tz, tx.now)
+            elif recurring is not None:
+                response["recurrence_check"] = self._recurrence_check(tx, after, recurring)
+            return self._respond(tx, response)
+
+    def _occurrence_to_complete(self, tx: Tx, recurring: Task) -> Task:
+        """Completing a recurring task completes one occurrence (SPEC 7.1, 7.2):
+        the oldest open instance, or a new one made for the purpose."""
+        s = tx.session
+        live = recur.open_instances(s, recurring)
+        if live:
+            return live[0]
+        if recurring.recur_mode is RecurMode.SCHEDULED:
+            slot = recur.next_slot(recurring, recurring.last_spawned_slot, tx.tz)
+            if slot is None:
+                raise Invalid(
+                    f"Task {recurring.id}'s schedule has no dates left.",
+                    hint="Record the work with complete_task(title=...) instead.",
+                )
+            instance = recur.make_instance(s, recurring, tx.now, slot=slot, triaged=True)
+            recurring.last_spawned_slot = slot
+            record(
+                s,
+                EventType.SPAWNED,
+                at=tx.now,
+                task_id=instance.id,
+                payload={"recurring_id": recurring.id, "occurrence_at": at_text(slot, tx.tz)},
             )
+            return instance
+        instance = recur.make_instance(s, recurring, tx.now, slot=None, triaged=True)
+        record(
+            s,
+            EventType.CREATED,
+            at=tx.now,
+            task_id=instance.id,
+            payload={"via": "complete", "parent_id": recurring.id},
+        )
+        return instance
+
+    @staticmethod
+    def _recurrence_check(tx: Tx, after: Snapshot, recurring: Task) -> dict[str, Any]:
+        """What a flexible task's completion shows the agent (SPEC 7.2)."""
+        times = history.recent_completions(tx.session, recurring.id, RECENT_COMPLETIONS + 1)
+        gaps = [
+            round((a - b).total_seconds() / 86_400, 1)
+            for a, b in zip(times, times[1:], strict=False)
+        ]
+        sleeping = None
+        if recurring.snooze_until is not None and recurring.snooze_until > tx.now:
+            sleeping = stamp(recurring.snooze_until, tx.tz, tx.now)
+        return views.compact(
+            {
+                "recurring": views.task_row(after, recurring, tx.tz),
+                "cadence": recurring.cadence,
+                "gap_days": recurring.gap_days,
+                "sleeping_until": sleeping,
+                "recent": [{"when": relative(t, tx.now)} for t in times[:RECENT_COMPLETIONS]],
+                "gaps_days": gaps,
+                "note": RECURRENCE_NOTE,
+            }
+        )
 
     def _pattern_named(self, tx: Tx, name: str) -> Pattern:
         """The pattern with this name, ignoring case, created if there is none."""
@@ -1280,7 +1474,6 @@ class Orchard:
             task = self._task(tx, task_id)
             if task.status is not Status.OPEN:
                 raise NotOpen(task.id, task.status.value, doing="snooze it")
-            self._reject_recurring_target(task, "snooze it")
             if until is not None:
                 target = parse_when(until, tx.tz, tx.now, DayMeans.SNOOZE)
             elif days == 0:
@@ -1288,7 +1481,21 @@ class Orchard:
             else:
                 target = day_snooze_end(tx.now, days, tx.tz)
             previous = None if task.snooze_until is None else at_text(task.snooze_until, tx.tz)
-            if target <= tx.now:
+            if task.recur_mode is RecurMode.SCHEDULED:
+                # A scheduled task's own snooze is a pause (SPEC 7.1).
+                if target > tx.now:
+                    task.snooze_until = target
+                    task.updated_at = tx.now
+                    record(
+                        s,
+                        EventType.PAUSED,
+                        at=tx.now,
+                        task_id=task.id,
+                        payload=views.compact({"until": at_text(target, tx.tz), "reason": reason}),
+                    )
+                elif task.snooze_until is not None:
+                    recur.resume(s, task, tx.now, tx.now, tx.tz)
+            elif target <= tx.now:
                 if task.snooze_until is not None:
                     task.snooze_until = None
                     task.updated_at = tx.now
@@ -1332,9 +1539,6 @@ class Orchard:
         with self.tx() as tx:
             s = tx.session
             tasks = [self._task(tx, i) for i in ids]
-            for task in tasks:
-                if task.status is Status.OPEN:
-                    self._reject_recurring_target(task, "drop it")
             listed = [t for t in tasks if t.status is Status.OPEN]
             listed_ids = frozenset(t.id for t in listed)
             skipped = [
@@ -1376,18 +1580,16 @@ class Orchard:
             task = self._task(tx, task_id)
             if task.status is Status.OPEN:
                 raise AlreadyOpen(task.id)
-            self._reject_recurring_target(task, "reopen it")
+            note = None
             if task.parent_id is not None:
                 parent = s.get(Task, task.parent_id)
-                if parent.is_recurring:
-                    raise Unsupported(
-                        f"Task {task.id} is an occurrence of a recurring task, so it cannot be "
-                        "reopened yet.",
-                        hint=RECURRING_LATER_HINT,
-                        task_id=task.id,
-                    )
                 if parent.status is not Status.OPEN:
                     raise ParentClosed(parent.id, parent.status.value)
+                if parent.is_recurring:
+                    note = self._check_reopen_instance(tx, parent)
+            if task.recur_mode is RecurMode.SCHEDULED:
+                # Slots that passed while it was retired are skipped (SPEC 8.10).
+                task.last_spawned_slot = max(task.last_spawned_slot, tx.now)
             payload: dict[str, Any] = {"was": task.status.value}
             done = task.completion
             if done is not None:
@@ -1413,7 +1615,25 @@ class Orchard:
             task.closed_at = None
             task.updated_at = tx.now
             record(s, EventType.REOPENED, at=tx.now, task_id=task.id, payload=payload)
-            return self._respond(tx, {"task": self._detail(tx, task)})
+            return self._respond(tx, {"task": self._detail(tx, task), "note": note})
+
+    @staticmethod
+    def _check_reopen_instance(tx: Tx, recurring: Task) -> str | None:
+        """The instance rules of SPEC 8.10. Returns the note about a gap snooze."""
+        live = recur.open_instances(tx.session, recurring)
+        if recurring.recur_mode is RecurMode.SCHEDULED:
+            if len(live) >= recur.INSTANCE_CAP:
+                raise InstanceCap(recurring.id, [t.id for t in live])
+            return None
+        if live:
+            raise InstanceExists(recurring.id, live[0].id)
+        if recurring.snooze_until is not None and recurring.snooze_until > tx.now:
+            return (
+                f"Task {recurring.id} is still sleeping until "
+                f"{at_text(recurring.snooze_until, tx.tz)} from the completion just undone. "
+                "Wake it with snooze_task(days=0) if it should be offered now."
+            )
+        return None
 
     # --- get_task, get_tree, search_tasks (8.12) ---
 
@@ -1857,6 +2077,17 @@ def _get_pattern(tx: Tx, pattern_id: Any) -> Pattern:
     if pattern is None:
         raise NotFound("pattern", pattern_id)
     return pattern
+
+
+def _reject_for_recurring(**given: Any) -> None:
+    """A recurring task has no deadline and no achievable value (SPEC 7.3)."""
+    bad = [name for name, value in given.items() if value is not None]
+    if bad:
+        raise Invalid(
+            f"A recurring task cannot have {', '.join(bad)}.",
+            hint="A recurring task is a container for occurrences. A scheduled task's "
+            "occurrences get their deadlines from its rule; set other values on an occurrence.",
+        )
 
 
 def _reject_recurring_blocker(task: Task) -> None:

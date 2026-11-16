@@ -432,12 +432,11 @@ def test_text_changes_are_logged_by_length(orchard: Orchard) -> None:
 # --- Recurring tasks before Phase 4 ---
 
 
-def test_phase_1_recurring_restrictions(orchard: Orchard, seeded: dict[str, int]) -> None:
+def test_permanent_recurring_rules(orchard: Orchard, seeded: dict[str, int]) -> None:
     laundry, summary = seeded["laundry"], seeded["summary"]
-    with pytest.raises(Unsupported):
-        orchard.update_task(laundry, priority="high")
-    with pytest.raises(Unsupported):
-        make(orchard, "Extra load", parent_id=laundry)
+    assert orchard.update_task(laundry, priority="high")["task"]["priority"] == "high"
+    with pytest.raises(Unsupported):  # the server spawns a scheduled task's occurrences
+        make(orchard, "Extra summary", parent_id=summary)
     with pytest.raises(Unsupported):
         make(orchard, "T", blocked_by=[summary])
     with pytest.raises(Unsupported):
@@ -446,8 +445,6 @@ def test_phase_1_recurring_restrictions(orchard: Orchard, seeded: dict[str, int]
         orchard.update_task(seeded["cert"], parent_id=laundry)
     with pytest.raises(Unsupported):  # an instance cannot be moved
         orchard.update_task(seeded["summary_w3"], clear=["parent_id"])
-    with pytest.raises(Unsupported):
-        orchard.create_task(title="T", recurrence={"mode": "flexible"})
     # Being blocked is allowed.
     result = orchard.link_tasks(blocker_id=seeded["cert"], blocked_id=laundry)
     assert result["blocked"]["blocked_by"][0]["id"] == seeded["cert"]

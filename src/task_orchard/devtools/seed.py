@@ -74,6 +74,7 @@ from task_orchard.core.enums import (
     Status,
 )
 from task_orchard.core.events import record
+from task_orchard.core.timefmt import at_text
 from task_orchard.db.models import Completion, Pattern, ProfileNote, Task, TaskBlock
 
 LEAD = timedelta(days=2)
@@ -515,13 +516,14 @@ def seed_demo(session: Session, now: datetime, tz: ZoneInfo) -> dict[str, int]:
             estimate_minutes=30,
             drain=Level.LOW,
             pattern_id=summary_pattern.id,
+            sources={"deadline": user},  # as roll_forward writes it; the rest added at triage
         )
         record(
             session,
             EventType.SPAWNED,
             at=slot - LEAD,
             task_id=inst.id,
-            payload={"recurring_id": summary.id, "occurrence_at": slot.isoformat()},
+            payload={"recurring_id": summary.id, "occurrence_at": at_text(slot, tz)},
         )
         instances.append(inst)
     z.complete(instances[0], slots[0] - timedelta(hours=3), Motive.MUST, actual_minutes=25)

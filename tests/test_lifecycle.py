@@ -12,9 +12,9 @@ from task_orchard.core.enums import EventType
 from task_orchard.core.errors import (
     AlreadyOpen,
     Invalid,
+    NotFound,
     NotOpen,
     ParentClosed,
-    Unsupported,
 )
 from task_orchard.core.events import record
 from task_orchard.core.service import Orchard
@@ -40,8 +40,9 @@ def test_start_records_a_start_and_counts_them(orchard: Orchard) -> None:
 def test_start_rules(orchard: Orchard, seeded: dict[str, int]) -> None:
     orchard.start_task(seeded["release_publish"])  # blocked: the user's actions are facts
     orchard.start_task(seeded["taxes"])  # dormant
-    with pytest.raises(Unsupported):
-        orchard.start_task(seeded["laundry"])
+    orchard.start_task(seeded["laundry"])  # a flexible task is worked on as itself
+    with pytest.raises(Invalid):
+        orchard.start_task(seeded["summary"])  # a scheduled one through its occurrence
     done = make(orchard)
     orchard.complete_task(done)
     with pytest.raises(NotOpen):
@@ -112,8 +113,6 @@ def test_snooze_needs_exactly_one_whole_time(orchard: Orchard, kw: dict) -> None
 
 
 def test_snooze_rules(orchard: Orchard, seeded: dict[str, int]) -> None:
-    with pytest.raises(Unsupported):
-        orchard.snooze_task(seeded["summary"], days=2)
     done = make(orchard)
     orchard.complete_task(done)
     with pytest.raises(NotOpen):
@@ -194,8 +193,8 @@ def test_drop_validation(orchard: Orchard, seeded: dict[str, int]) -> None:
     for kw in ({"task_ids": [], "reason": "x"}, {"task_ids": [task], "reason": "  "}):
         with pytest.raises(Invalid):
             orchard.drop_tasks(**kw)
-    with pytest.raises(Unsupported):
-        orchard.drop_tasks([task, seeded["laundry"]], reason="x")
+    with pytest.raises(NotFound):
+        orchard.drop_tasks([task, 9999], reason="x")
     assert counts(orchard) == before
 
 
@@ -254,8 +253,6 @@ def test_reopen_rules(orchard: Orchard, seeded: dict[str, int]) -> None:
     with pytest.raises(ParentClosed) as caught:
         orchard.reopen_task(child)
     assert "reopen" in caught.value.hint
-    with pytest.raises(Unsupported):
-        orchard.reopen_task(seeded["summary_w0"])  # instance rules arrive with recurrence
 
 
 # --- Per-task counts (5.6) ---

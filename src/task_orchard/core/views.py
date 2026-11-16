@@ -18,8 +18,15 @@ from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
 
-from task_orchard.core import history, timefmt
-from task_orchard.core.enums import TRACKED_FIELDS, Achievable, EventType, Firmness, Status
+from task_orchard.core import history, recurrence, timefmt
+from task_orchard.core.enums import (
+    TRACKED_FIELDS,
+    Achievable,
+    EventType,
+    Firmness,
+    RecurMode,
+    Status,
+)
 from task_orchard.db.models import Event, Pattern, Task
 
 if TYPE_CHECKING:
@@ -182,9 +189,7 @@ def task_row(
     row["deferred"] = counts.deferred
     row["starts"] = counts.starts
     if task.is_recurring:
-        row["recurring"] = compact(
-            {"mode": task.recur_mode.value, "cadence": task.cadence, "gap_days": task.gap_days}
-        )
+        row["recurring"] = recurring_block(snap, task, tz)
     if task.pattern_id is not None:
         found = snap.pattern(task.pattern_id)
         row["pattern"] = compact(
@@ -196,6 +201,32 @@ def task_row(
         )
     keep = ("id", "title", "status") if always_status else ("id", "title")
     return compact(row, keep=keep)
+
+
+# --- Recurring tasks (7) ---
+
+
+def recurring_block(snap: Snapshot, task: Task, tz: ZoneInfo) -> dict[str, Any]:
+    """The `recurring` key of a recurring task's row (SPEC 4.3, 7.2)."""
+    now = snap.now
+    done, last = snap.recurring_done(task)
+    block: dict[str, Any] = {
+        "mode": task.recur_mode.value,
+        "cadence": task.cadence,
+        "gap_days": task.gap_days,
+        "last_done": None if last is None else timefmt.relative(last, now),
+        "done_count": done,
+    }
+    if task.recur_mode is RecurMode.FLEXIBLE:
+        if task.gap_days and task.snooze_until is not None and task.snooze_until <= now:
+            block["past_wake_days"] = (now - task.snooze_until).days
+    elif task.status is Status.OPEN:
+        after = task.last_spawned_slot
+        if task.snooze_until is not None and task.snooze_until > after:
+            after = task.snooze_until  # paused: the slots before it are skipped
+        upcoming = recurrence.next_slot(task, after, tz)
+        block["next_slot"] = None if upcoming is None else timefmt.stamp(upcoming, tz, now)
+    return compact(block)
 
 
 # --- Pattern digests (6.1) ---

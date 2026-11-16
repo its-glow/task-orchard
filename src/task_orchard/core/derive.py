@@ -77,6 +77,7 @@ class Snapshot:
         self._remaining: dict[int, int] = {}
         self._counts: dict[int, history.Counts] | None = None
         self._patterns: dict[int, Pattern] | None = None
+        self._recurring_done: dict[int, tuple[int, datetime]] | None = None
 
     # --- Access ---
 
@@ -119,6 +120,15 @@ class Snapshot:
 
     def last_touched(self, task: Task) -> datetime:
         return self.counts(task).last_touched or task.created_at
+
+    def recurring_done(self, task: Task) -> tuple[int, datetime | None]:
+        """(instances done, latest completion) for a recurring task."""
+        if self._recurring_done is None:
+            ids = [t.id for t in self._tasks.values() if t.is_recurring]
+            self._recurring_done = history.recurring_done(self.session, ids)
+        if task.id not in self._recurring_done:
+            self._recurring_done.update(history.recurring_done(self.session, [task.id]))
+        return self._recurring_done.get(task.id, (0, None))
 
     def pattern(self, pattern_id: int) -> Pattern:
         if self._patterns is None:

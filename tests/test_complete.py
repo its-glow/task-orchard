@@ -12,7 +12,6 @@ from task_orchard.core.errors import (
     Invalid,
     NotOpen,
     ParentClosed,
-    Unsupported,
 )
 from task_orchard.core.service import Orchard
 from tests.conftest import NOW
@@ -114,13 +113,6 @@ def test_a_closed_task_cannot_be_completed(orchard: Orchard) -> None:
     with pytest.raises(NotOpen) as caught:
         orchard.complete_task(task)
     assert "reopen_task" in caught.value.hint
-
-
-def test_a_recurring_task_cannot_be_completed_until_phase_4(
-    orchard: Orchard, seeded: dict[str, int]
-) -> None:
-    with pytest.raises(Unsupported):
-        orchard.complete_task(seeded["laundry"])
 
 
 def test_an_instance_completes_as_a_plain_task(orchard: Orchard, seeded: dict[str, int]) -> None:
