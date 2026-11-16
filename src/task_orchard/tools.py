@@ -370,6 +370,18 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         """
         return orchard.reopen_task(task_id)
 
+    @_tool
+    def merge_tasks(
+        source_id: Annotated[int, _p("The duplicate, which is dropped, e.g. 14.")],
+        into_id: Annotated[int, _p("The task to keep, e.g. 9.")],
+    ) -> dict[str, Any]:
+        """Fold a duplicate into the task that should survive.
+
+        Its children and links move over, fields the kept task lacks are
+        filled from it, and its text is added to the kept task's notes.
+        """
+        return orchard.merge_tasks(source_id, into_id)
+
     @_read_only
     def get_task(task_id: Annotated[int, _p("e.g. 12.")]) -> dict[str, Any]:
         """Everything about one task: its fields and where each came from,
@@ -450,6 +462,21 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         return orchard.get_critical(horizon_days)
 
     @_read_only
+    def get_review_queue() -> dict[str, Any]:
+        """What needs looking at: the inbox, parents with nothing left open,
+        overdue, deferred and restarted work, untouched tasks, duplicates,
+        conflicts and missed occurrences. For housekeeping and reviews."""
+        return orchard.get_review_queue()
+
+    @_read_only
+    def get_recent_activity(
+        days: Annotated[int, _p("1 to 31, e.g. 7.")] = 7,
+    ) -> dict[str, Any]:
+        """What happened lately: completed, dropped and missed work, counts,
+        and the want / should / must balance over 7 and 30 days."""
+        return orchard.get_recent_activity(days)
+
+    @_read_only
     def find_patterns(
         query: Annotated[str | None, _p('Words, e.g. "phone call". Omit for recent.')] = None,
         limit: Annotated[int, _p("1 to 10, e.g. 5.")] = 5,
@@ -497,6 +524,14 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         characters each, 8,000 in all; consolidate when full.
         """
         return orchard.write_profile_note(topic, text)
+
+    @_tool
+    def set_timezone(
+        name: Annotated[str, _p('An IANA name, e.g. "Europe/London".')],
+    ) -> dict[str, Any]:
+        """Save the user's timezone, once they have confirmed it. Dates such as
+        "today" and recurring schedules follow it from the next call."""
+        return orchard.set_timezone(name)
 
     return [_build(fn, read_only) for fn, read_only in fns]
 

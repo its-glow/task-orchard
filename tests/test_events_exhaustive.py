@@ -87,6 +87,12 @@ def _complete_recurring(o: Orchard, t: Ids) -> None:
     t["new"] = o.complete_task(t["r"])["completed"]["id"]
 
 
+def _merge_loop(o: Orchard) -> Ids:
+    source = make(o, "Source")
+    child = make(o, "Child", parent_id=source)
+    return {"source": source, "into": make(o, "Into", blocked_by=[child])}
+
+
 def _blocker_and_blocked(o: Orchard) -> Ids:
     blocker = make(o, "Blocker")
     return {"blocker": blocker, "blocked": make(o, "Blocked", blocked_by=[blocker])}
@@ -257,6 +263,22 @@ CASES: dict[str, Case] = {
         lambda o, t: o.drop_tasks([t["r"]], reason="x"),
         [("dropped", "r"), ("dropped", "i")],
     ),
+    # Phase 5.
+    "merge_tasks": (
+        lambda o: {"into": make(o, "Into"), "source": make(o, "Source")},
+        lambda o, t: o.merge_tasks(t["source"], t["into"]),
+        [("merged", "source"), ("updated", "into")],
+    ),
+    "set_timezone": (
+        lambda o: {},
+        lambda o, t: o.set_timezone("Asia/Tokyo"),
+        [("settings_saved", None)],
+    ),
+    "set_timezone unchanged": (
+        lambda o: o.set_timezone("Asia/Tokyo") and {},
+        lambda o, t: o.set_timezone("asia/tokyo"),
+        [],
+    ),
     "write_profile_note": (
         lambda o: {},
         lambda o, t: o.write_profile_note("energy", "Low after 3pm."),
@@ -308,6 +330,14 @@ FAILURES: dict[str, tuple[Callable[[Orchard], Ids], Callable[[Orchard, Ids], Any
     "update_task recurring with a deadline left on": (
         lambda o: {"task": make(o, deadline="friday")},
         lambda o, t: o.update_task(t["task"], recurrence={"mode": "flexible"}),
+    ),
+    "merge_tasks into a loop": (
+        _merge_loop,
+        lambda o, t: o.merge_tasks(t["source"], t["into"]),
+    ),
+    "set_timezone unknown": (
+        lambda o: {},
+        lambda o, t: o.set_timezone("Atlantis/Lost"),
     ),
     "save_pattern merge onto a taken name": (
         lambda o: {"keep": _pattern(o, "Keep"), "fold": _pattern(o, "Fold"), "x": _pattern(o, "X")},

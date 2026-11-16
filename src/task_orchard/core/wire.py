@@ -16,6 +16,8 @@ from task_orchard.core.errors import Invalid
 
 TITLE_MAX_CHARS = 500
 NOTES_MAX_CHARS = 20_000
+CONDITIONS_MAX = 5
+CONDITION_MAX_CHARS = 30
 CAPTURE_MAX_ITEMS = 20
 
 
@@ -88,8 +90,18 @@ def conditions(value: Any) -> list[str]:
         if not isinstance(tag, str):
             raise Invalid("Each condition must be text.", hint='For example "at-home".')
         cleaned = "-".join(tag.strip().lower().split())
+        if len(cleaned) > CONDITION_MAX_CHARS:
+            raise Invalid(
+                f"The condition {cleaned[:40]!r} is longer than {CONDITION_MAX_CHARS} characters.",
+                hint='A condition is a short tag, such as "at-home" or "good-weather".',
+            )
         if cleaned and cleaned not in out:
             out.append(cleaned)
+    if len(out) > CONDITIONS_MAX:
+        raise Invalid(
+            f"{len(out)} conditions given; a task has at most {CONDITIONS_MAX}.",
+            hint="Keep the conditions that really decide when it can be done.",
+        )
     return out
 
 

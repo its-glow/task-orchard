@@ -48,6 +48,7 @@ from task_orchard.core import recurrence as recur
 from task_orchard.core.clock import Clock, SystemClock
 from task_orchard.core.derive import Snapshot
 from task_orchard.core.enums import (
+    TRACKED_FIELDS,
     Achievable,
     EventType,
     FieldSource,
@@ -294,8 +295,11 @@ class Orchard:
         set_parent: dict[int, int | None] | None = None,
     ) -> None:
         steps = graph.check(self._structure(tx), add_blocks=add_blocks, set_parent=set_parent)
-        if steps is None:
-            return
+        if steps is not None:
+            self._raise_cycle(tx, steps)
+
+    @staticmethod
+    def _raise_cycle(tx: Tx, steps: list[tuple[int, str | None]]) -> None:
         path = []
         for task_id, because in steps:
             task = tx.session.get(Task, task_id)
@@ -1863,6 +1867,134 @@ class Orchard:
             payload = shortlist.critical(snap, tx.tz, horizon=timedelta(days=days))
             return self._respond(tx, payload, keep=["critical", "inbox"])
 
+    # --- merge_tasks (8.11) ---
+
+    def merge_tasks(self, source_id: int, into_id: int) -> dict[str, Any]:
+        with self.tx() as tx:
+            s = tx.session
+            source = self._task(tx, source_id, "source task")
+            into = self._task(tx, into_id, "target task")
+            if source.id == into.id:
+                raise Invalid(
+                    "A task cannot be merged into itself.",
+                    hint="Pass the duplicate as source_id and the task to keep as into_id.",
+                )
+            for task in (source, into):
+                if task.status is not Status.OPEN:
+                    raise NotOpen(task.id, task.status.value, doing="merge it")
+                self._reject_recurring_merge(tx, task)
+            structure = self._structure(tx)
+            if into.id in graph.ancestors(source.id, structure.parent) or source.id in (
+                graph.ancestors(into.id, structure.parent)
+            ):
+                raise Invalid(
+                    f"Tasks {source.id} and {into.id} are in the same branch.",
+                    hint="Merge only separate tasks. To fold a child into its parent, "
+                    "complete or drop the child instead.",
+                )
+
+            children = list(
+                s.scalars(sa.select(Task).where(Task.parent_id == source.id).order_by(Task.id))
+            )
+            old_links = {(a, b) for a, b in structure.blocks if source.id in (a, b)}
+            new_links = set()
+            for blocker, blocked in old_links:
+                link = (
+                    into.id if blocker == source.id else blocker,
+                    into.id if blocked == source.id else blocked,
+                )
+                if link[0] != link[1] and link not in structure.blocks:
+                    new_links.add(link)
+            structure.blocks = (structure.blocks - old_links) | new_links
+            for child in children:
+                structure.parent[child.id] = into.id
+            steps = graph.check(structure)
+            if steps is not None:
+                self._raise_cycle(tx, steps)
+
+            before = Snapshot(s, tx.now)
+            for child in children:
+                child.parent_id = into.id
+                child.updated_at = tx.now
+            s.execute(
+                sa.delete(TaskBlock).where(
+                    sa.or_(TaskBlock.blocker_id == source.id, TaskBlock.blocked_id == source.id)
+                )
+            )
+            for blocker, blocked in sorted(new_links):
+                s.add(TaskBlock(blocker_id=blocker, blocked_id=blocked, created_at=tx.now))
+
+            changes, filled = self._fill_from(tx, into, source)
+            old_notes = into.notes or ""
+            into.notes = _merged_notes(old_notes, source)
+            changes["notes"] = {"from_chars": len(old_notes), "to_chars": len(into.notes)}
+            if any(before.is_open(c.id) for c in children) and into.achievable is not (
+                Achievable.NO
+            ):
+                was = changes.get("achievable", {}).get("from", into.achievable.value)
+                into.achievable = Achievable.NO
+                into.field_sources["achievable"] = FieldSource.EVIDENCE.value
+                changes["achievable"] = {
+                    "from": None if was == Achievable.UNKNOWN.value else was,
+                    "to": Achievable.NO.value,
+                    "source": FieldSource.EVIDENCE.value,
+                }
+            into.updated_at = tx.now
+            self._close(tx, source, Status.DROPPED)
+
+            record(
+                s,
+                EventType.MERGED,
+                at=tx.now,
+                task_id=source.id,
+                payload={
+                    "into": into.id,
+                    "moved_children": [c.id for c in children],
+                    "moved_links": len(new_links),
+                    "filled": filled,
+                },
+            )
+            record(s, EventType.UPDATED, at=tx.now, task_id=into.id, payload={"changes": changes})
+            return self._respond(tx, {"task": self._detail(tx, into)})
+
+    @staticmethod
+    def _reject_recurring_merge(tx: Tx, task: Task) -> None:
+        parent = None if task.parent_id is None else tx.session.get(Task, task.parent_id)
+        if task.is_recurring or (parent is not None and parent.is_recurring):
+            raise Unsupported(
+                f"Task {task.id} is recurring or an occurrence of one, so it cannot be merged.",
+                hint="Drop the extra occurrence instead, or merge plain tasks only.",
+                task_id=task.id,
+            )
+
+    @staticmethod
+    def _fill_from(tx: Tx, into: Task, source: Task) -> tuple[dict[str, Any], list[str]]:
+        """Copy every tracked field the target lacks and the source has (SPEC 8.11)."""
+        changes: dict[str, Any] = {}
+        filled: list[str] = []
+        for name in TRACKED_FIELDS:
+            if views.wire_value(name, into, tx.tz) is not None:
+                continue
+            value = views.wire_value(name, source, tx.tz)
+            if value is None:
+                continue
+            if name == "deadline":
+                into.deadline = source.deadline
+                into.deadline_firmness = source.deadline_firmness
+            elif name == "conditions":
+                into.conditions = list(source.conditions)
+            else:
+                setattr(into, name, getattr(source, name))
+            origin = source.field_sources.get(name, FieldSource.GUESS.value)
+            into.field_sources[name] = origin
+            changes[name] = {"from": None, "to": value, "source": origin}
+            filled.append(name)
+        if into.pattern_id is None and source.pattern_id is not None:
+            into.pattern_id = source.pattern_id
+            changes["pattern_id"] = {"from": None, "to": source.pattern_id}
+            filled.append("pattern_id")
+        return changes, filled
+
     # --- get_review_queue (8.15), get_recent_activity (8.16) ---
 
     def get_review_queue(self) -> dict[str, Any]:
@@ -1914,6 +2046,13 @@ class Orchard:
             given["name"] = _pattern_name(name, "name")
         if description is not None:
             given["description"] = wire.text(description, "description").strip() or None
+            limit = views.PATTERN_DESCRIPTION_MAX_CHARS
+            if given["description"] and len(given["description"]) > limit:
+                raise Invalid(
+                    f"description is {len(given['description'])} characters; the limit is {limit}.",
+                    hint="Say briefly what counts as this kind of work. What has been learned "
+                    "about it goes in learned.",
+                )
         if learned is not None:
             text = wire.text(learned, "learned").strip()
             if len(text) > LEARNED_MAX_CHARS:
@@ -2263,3 +2402,19 @@ def _zone_named(name: Any) -> str:
 @functools.cache
 def _zone_names() -> dict[str, str]:
     return {zone.casefold(): zone for zone in zoneinfo.available_timezones()}
+
+
+MERGED_CUT = "… (cut to fit; see #{id})"
+
+
+def _merged_notes(notes: str, source: Task) -> str:
+    """The target's notes with the source's title, description and notes added
+    under a `Merged from` line, cut to fit the notes limit (SPEC 8.11)."""
+    parts = [f"Merged from #{source.id}: {source.title}"]
+    parts += [text for text in (source.description, source.notes) if text]
+    added = "\n".join(parts)
+    joined = f"{notes}\n\n{added}" if notes else added
+    if len(joined) <= wire.NOTES_MAX_CHARS:
+        return joined
+    cut = MERGED_CUT.format(id=source.id)
+    return joined[: wire.NOTES_MAX_CHARS - len(cut)] + cut

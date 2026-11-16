@@ -43,6 +43,7 @@ DETAIL_EVENTS = 10
 DETAIL_NOTES_CHARS = 2000
 EVENT_NOTE_CHARS = 120
 PATTERN_HINT_CHARS = 120
+PATTERN_DESCRIPTION_MAX_CHARS = 600
 TOUCHED_AFTER = timedelta(days=1)
 ELLIPSIS = "…"
 
@@ -196,7 +197,7 @@ def task_row(
         row["pattern"] = compact(
             {
                 "id": found.id,
-                "name": found.name,
+                "name": truncate(found.name, NESTED_TITLE_CHARS),
                 "hint": truncate(found.learned, PATTERN_HINT_CHARS) if found.learned else None,
             }
         )
@@ -240,6 +241,8 @@ def pattern_digests(
     for digest in history.pattern_digests(session, patterns):
         last = digest["last_done"]
         digest["last_done"] = None if last is None else timefmt.stamp(last, tz, now)
+        if digest["description"]:  # stored before the limit existed
+            digest["description"] = truncate(digest["description"], PATTERN_DESCRIPTION_MAX_CHARS)
         out.append(compact(digest, keep=("id", "name")))
     return out
 

@@ -479,3 +479,12 @@ def test_events_written_by_create_are_typed(orchard: Orchard) -> None:
     make(orchard, "T")
     with orchard.tx() as tx:
         assert tx.session.scalar(sa.select(Event.type)) is EventType.CREATED
+
+
+def test_conditions_are_short_and_few(orchard: Orchard) -> None:
+    five = ["a", "b", "c", "d", "e"]
+    assert len(orchard.create_task("T", conditions=five)["task"]["conditions"]) == 5
+    with pytest.raises(Invalid):
+        orchard.create_task("T", conditions=[*five, "f"])
+    with pytest.raises(Invalid):
+        orchard.create_task("T", conditions=["x" * 31])
