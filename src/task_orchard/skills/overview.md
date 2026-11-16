@@ -53,4 +53,4 @@ Be brief with the user. They came to offload thinking, not to fill in forms.
 
 ## Guides
 
-Call `get_guide` with no name to see which guides exist. Read the guide for a job before starting it.
+Each kind of job has its own guide, such as the `triage` guide for sorting the inbox and the `what-now` guide for choosing what to do. Read the guide for a job before starting it, and follow it. If the guides are not already in front of you, call `get_guide` with no name to list them.

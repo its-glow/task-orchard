@@ -23,7 +23,7 @@ from task_orchard.core.events import record
 from task_orchard.core.service import Orchard
 from task_orchard.db.models import Completion, Event, Pattern, ProfileNote, Task, TaskBlock
 from task_orchard.devtools.seed import DatabaseNotEmpty, seed_demo
-from task_orchard.mcp.guides import GuideFormatError, load_guides, parse_guide
+from task_orchard.guides import GuideFormatError, load_guides, parse_guide
 from task_orchard.mcp.server import build_server
 from tests.conftest import NOW, TZ
 

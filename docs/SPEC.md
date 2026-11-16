@@ -2,9 +2,9 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done and tested. Phase 2A (the app) is next; it and Phases 3–6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation) and 2A (the app) are done and tested; Phase 2A's two scenarios pass on Claude Haiku 5.5. Phases 3–6 are specified here and not yet built.
 
-**How it is used.** Task Orchard has its own assistant, called the app: a loop that talks to a model and calls the operations of section 8 directly (section 10.2). The app is the primary way in, and behaviour is designed and tested against it. Other assistants reach the same operations over MCP, and programs over REST; both are adapters built out in Phase 6 (section 12). Until Phase 2A is built, the MCP adapter that Phases 1 and 2 produced is the only way in.
+**How it is used.** Task Orchard has its own assistant, called the app: a loop that talks to a model and calls the operations of section 8 directly (section 10.2). The app is the primary way in, and behaviour is designed and tested against it. Other assistants reach the same operations over MCP, and programs over REST; both are adapters built out in Phase 6 (section 12).
 
 ## Contents
 
@@ -1129,7 +1129,7 @@ Build: effective values and section 5.5 in `derive`, `shortlist`, `get_candidate
 | `test_critical.py` | Blocked, dormant and inbox leaves are included, blocked ones with `blocked_by` (at most 5 plus `blocked_by_more`); non-leaves and recurring tasks are not; horizon boundaries. At risk is judged on the work of whoever owns the deadline (5.5): the leaves of a project due in three days with thirty hours of open work are listed, while a leaf with its own earlier deadline is judged on its own estimate. |
 | `test_profile.py` | Upsert, delete by blank text, case-insensitive topics, each limit and `profile_full`. |
 
-### Phase 2A — The app
+### Phase 2A — The app (done)
 
 Build: the tool catalogue (section 10.1), the app (section 10.2) with `task-orchard chat` and `task-orchard ask`, the generic MCP adapter (section 10.3), and the scenario harness with its first two scenarios.
 
@@ -1153,6 +1153,7 @@ This phase adds no operation and changes no behaviour of `core`. There is no sch
 | `test_agent_loop.py` | With `ScriptedModel`: a reply with no tool call ends the turn with its text. A tool call changes the database and its result goes back. Two calls in one reply run in order and their results go back in one message. An `OrchardError` goes back as a failed result and the loop continues, so a scripted retry succeeds. The step limit, `max_tokens` and `refusal` each end the turn with the stated text. A reply cut off with a tool call in it gets a `not_run` result for that call, nothing runs, and in the next request every tool call is followed by its result. Over several turns, the system prompt, the tool list and every earlier message of each request equal those of the request before it. A reply's content is passed back unchanged, including a block the loop does not know. A model that raises leaves the conversation as it was, including tool results already appended. |
 | `test_chat_cli.py` | With a scripted model injected: `ask` prints the answer and exits 0, and exits 1 when the model cannot be reached. `chat` answers on stdout and reports tool calls on stderr; `/new` starts a session that reads the profile again; `/quit` and end of input exit; `--transcript` writes one JSON line per message and tool outcome; the long-session notice appears once. A session starts on the basic tier's model; `--strategic`, `/strategic` and `/basic` select the other tier's model and effort, and a switch keeps every earlier message. Missing credentials give the stated message and exit 1 before any input is read. |
 | `test_mcp_adapter.py` | Through the in-memory client: the server lists exactly the catalogue's tools plus `get_guide`, with the catalogue's descriptions; one read, one write and one error round-trip. |
+| `test_agent_model.py` | Offline, with a fake client: the tiers come from the settings with their efforts; the request marks the stable system block and the conversation for caching and sends no thinking setting; fallback is requested only for models that support it; a reply's blocks are read whole; stop reasons map as stated; an API failure becomes `ModelUnavailable`. |
 | `test_layering.py` | By reading the imports of every module: `core` imports nothing from `tools`, `agent`, `mcp` or `api`; `tools` imports nothing from `agent`, `mcp` or `api`; `agent` and `mcp` import nothing from each other; only `agent/model.py` imports `anthropic`. |
 
 ### Phase 3 — Leading edge and completion
@@ -1299,3 +1300,9 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | REST views | REST routes do not return the model-facing rows of section 4, as the plan had it. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
 | Unattended runs | In Phase 6, housekeeping and the morning and evening skills are runs of the app started by the operating system's scheduler. Task Orchard still has no background process of its own. An agent platform over MCP remains possible but is no longer the plan. |
 | Commands | `task-orchard mcp` names the stdio MCP server from Phase 2A. The bare command and `serve` keep running it until Phase 6, when `serve` becomes the HTTP service; that change is confirmed with the user first. |
+| Catalogue schemas | Built from each tool function's annotated signature with pydantic, with `additionalProperties: false`, titles dropped and `$defs` inlined, so the schema the app sends matches what FastMCP shows MCP clients. Validation is pydantic's lax mode, as in the MCP adapter: `"30"` is accepted for a whole number, `"lots"` is not. |
+| Timezone warning | The text lives in `config.py` (`TIMEZONE_WARNING`) so that the app's preamble and the MCP adapter's `INSTRUCTIONS` share it without importing each other. It now says to set `TASK_ORCHARD_TZ` "in the environment Task Orchard runs in", where it said "in this server's environment". |
+| Profile in the prompt | The profile block leaves out the `now` that every response carries: it would be the session's start time, and the current time already comes with each user message. |
+| Credentials check | The SDK builds a client without credentials and fails only at the first request. So `chat` and `ask` ask the SDK's own resolution whether it found a key, a token or a login profile, and exit with the help text before reading input or opening the database. |
+| Fallback models | Server-side fallback on a refusal is requested only for a fixed list of models known to support it (`FALLBACK_MODELS` in `agent/model.py`): Opus 5.5 and 5, Sonnet 5.5, Fable 5.2 and 5.1. The list needs updating when models change. |
+| Chat details | Unknown `/` commands are answered with the list of commands. The tier and model are shown on stderr as `[basic: claude-haiku-5-5]`. The transcript tags each line with the session's number, since `/new` starts another in the same file. The stop reason `model_context_window_exceeded` counts as `end`, as section 10.2 says of any unlisted reason. |

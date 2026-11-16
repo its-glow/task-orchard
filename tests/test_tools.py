@@ -1,0 +1,190 @@
+"""SPEC 10.1: the tool catalogue and call_tool."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+import sqlalchemy as sa
+
+from task_orchard.core.service import Orchard
+from task_orchard.db.models import Event, Task
+from task_orchard.tools import Tool, call_tool, catalogue
+
+# Section 8 order, as far as it is built.
+BUILT = [
+    "capture_tasks",
+    "create_task",
+    "update_task",
+    "link_tasks",
+    "unlink_tasks",
+    "get_task",
+    "get_tree",
+    "search_tasks",
+    "get_candidates",
+    "get_critical",
+    "read_profile",
+    "write_profile_note",
+]
+READ_ONLY = {
+    "get_task",
+    "get_tree",
+    "search_tasks",
+    "get_candidates",
+    "get_critical",
+    "read_profile",
+}
+
+
+def counts(orchard: Orchard) -> tuple[int, int]:
+    with orchard.tx() as tx:
+        tasks = tx.session.scalar(sa.select(sa.func.count()).select_from(Task))
+        events = tx.session.scalar(sa.select(sa.func.count()).select_from(Event))
+    return tasks, events
+
+
+@pytest.fixture
+def tools(orchard: Orchard) -> list[Tool]:
+    return catalogue(orchard)
+
+
+def test_one_tool_per_built_operation_in_section_8_order(tools: list[Tool]) -> None:
+    assert [t.name for t in tools] == BUILT
+    for tool in tools:
+        assert callable(getattr(Orchard, tool.name)), tool.name
+    assert "get_guide" not in {t.name for t in tools}
+
+
+def test_read_only_is_set_for_exactly_the_reads(tools: list[Tool]) -> None:
+    assert {t.name for t in tools if t.read_only} == READ_ONLY
+
+
+def test_descriptions_are_short(tools: list[Tool]) -> None:
+    for tool in tools:
+        assert tool.description, tool.name
+        assert len(tool.description.split()) <= 80, tool.name
+
+
+def test_every_schema_is_an_object_with_described_parameters(tools: list[Tool]) -> None:
+    for tool in tools:
+        schema = tool.input_schema
+        assert schema["type"] == "object", tool.name
+        assert schema.get("additionalProperties") is False, tool.name
+        for name, prop in schema["properties"].items():
+            assert prop.get("description"), f"{tool.name}.{name}"
+    required = {t.name: t.input_schema.get("required", []) for t in tools}
+    assert required["get_task"] == ["task_id"]
+    assert required["read_profile"] == []
+
+
+def _enum_of(prop: dict[str, Any]) -> list[str] | None:
+    if "enum" in prop:
+        return prop["enum"]
+    for option in prop.get("anyOf", []):
+        if "enum" in option:
+            return option["enum"]
+    return None
+
+
+def test_enumerated_parameters_list_their_names(tools: list[Tool]) -> None:
+    by_name = {t.name: t for t in tools}
+    create = by_name["create_task"].input_schema["properties"]
+    assert _enum_of(create["priority"]) == ["low", "normal", "high", "critical"]
+    assert _enum_of(create["motive"]) == ["want", "should", "must"]
+    energy = by_name["get_candidates"].input_schema["properties"]["energy"]
+    assert _enum_of(energy) == ["low", "medium", "high"]
+    status = by_name["search_tasks"].input_schema["properties"]["status"]
+    assert _enum_of(status) == ["open", "closed", "any"]
+
+
+def test_names_are_still_matched_leniently(tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "create_task", {"title": "Renew passport", "motive": "Must"})
+    assert not outcome.is_error, outcome.payload
+    assert outcome.payload["task"]["fields"]["motive"]["value"] == "must"
+
+
+def test_success_returns_the_methods_dict(
+    orchard: Orchard, seeded: dict[str, int], tools: list[Tool]
+) -> None:
+    outcome = call_tool(tools, "search_tasks", {"query": "release", "limit": 5})
+    assert outcome.is_error is False
+    assert outcome.payload == orchard.search_tasks("release", limit=5)
+
+    outcome = call_tool(tools, "get_candidates", {"energy": "low", "limit": 4})
+    assert outcome.payload == orchard.get_candidates(limit=4, energy="low")
+
+    outcome = call_tool(tools, "read_profile", {})
+    assert outcome.payload == orchard.read_profile()
+
+
+def test_a_write_changes_the_database(orchard: Orchard, tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "capture_tasks", {"items": [{"title": "Buy stamps"}]})
+    assert not outcome.is_error
+    assert orchard.search_tasks("stamps")["total"] == 1
+
+
+def test_an_orchard_error_becomes_the_section_4_2_json(orchard: Orchard, tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "get_task", {"task_id": 999})
+    assert outcome.is_error is True
+    assert outcome.payload["error"] == "not_found"
+    assert outcome.payload["message"] and outcome.payload["hint"]
+
+
+def test_an_unknown_tool_is_invalid_and_lists_the_names(tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "complete_task", {"task_id": 1})
+    assert outcome.is_error
+    assert outcome.payload["error"] == "invalid"
+    assert "capture_tasks" in outcome.payload["hint"]
+    assert "write_profile_note" in outcome.payload["hint"]
+
+
+def test_a_missing_argument_is_invalid_and_nothing_is_written(
+    orchard: Orchard, tools: list[Tool]
+) -> None:
+    before = counts(orchard)
+    outcome = call_tool(tools, "create_task", {"priority": "high"})
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+    assert "title" in outcome.payload["hint"]
+    assert counts(orchard) == before
+
+
+def test_a_wrong_type_is_invalid_and_nothing_is_written(
+    orchard: Orchard, tools: list[Tool]
+) -> None:
+    before = counts(orchard)
+    outcome = call_tool(tools, "create_task", {"title": "Fix the gate", "estimate_minutes": "lots"})
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+    assert "estimate_minutes" in outcome.payload["hint"]
+    assert counts(orchard) == before
+
+
+def test_a_number_written_as_a_string_is_accepted(orchard: Orchard, tools: list[Tool]) -> None:
+    # Lax, as the MCP adapter is: a small model often quotes numbers.
+    created = call_tool(tools, "create_task", {"title": "Fix the gate", "estimate_minutes": "30"})
+    assert not created.is_error
+    assert created.payload["task"]["fields"]["estimate_minutes"]["value"] == 30
+
+
+def test_an_unknown_parameter_is_invalid_and_nothing_is_written(
+    orchard: Orchard, tools: list[Tool]
+) -> None:
+    before = counts(orchard)
+    outcome = call_tool(tools, "create_task", {"title": "Fix the gate", "colour": "green"})
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+    assert "colour" in outcome.payload["hint"]
+    assert "estimate_minutes" in outcome.payload["hint"]  # names the real parameters
+    assert counts(orchard) == before
+
+
+def test_arguments_that_are_not_an_object_are_invalid(tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "get_task", ["12"])  # type: ignore[arg-type]
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+
+
+def test_a_bug_propagates(orchard: Orchard, tools: list[Tool], monkeypatch) -> None:
+    def broken(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchard, "read_profile", broken)
+    with pytest.raises(RuntimeError):
+        call_tool(tools, "read_profile", {})

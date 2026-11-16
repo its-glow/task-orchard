@@ -8,7 +8,7 @@ Goal: every task in the inbox gets its fields filled in and leaves the inbox, wi
 
 ## Steps
 
-1. Call `read_profile` if you have not this conversation. The charter and notes are your best evidence about the user.
+1. If the user's profile is not already in front of you, call `read_profile`. The charter and notes are your best evidence about the user.
 2. Call `search_tasks` with `inbox_only: true` and `limit: 30`. These are the tasks to triage. If there are none, say so and stop. If `total` is more than the rows returned, finish this batch, then search again: triaged tasks leave the inbox, so the next search returns the rest.
 3. For each task, **guess first**. Work out from its title, its parent (`get_task` if it has one) and the profile:
    - `priority`, `deadline` and `firmness`, `estimate_minutes`, `activation`, `drain`, `motive`, `conditions`, `achievable`.

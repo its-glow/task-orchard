@@ -8,19 +8,20 @@ A single-user task and time management service with its own AI assistant. The se
 2. `IMPLEMENTATION_PLAN.md` — why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phases 0 (scaffold and schema), 1 (tasks and graph) and 2 (prioritisation) are done. **Next is Phase 2A, the app**: SPEC sections 10.1 to 10.3 say what it is, and section 11 gives the steps for moving from the MCP-first code and the tests. Then 3, 4, 5, 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11.
+Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation) and 2A (the app) are done. Next is Phase 3, then 4, 5, 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.3 describe the catalogue, the app and the MCP adapter.
 
-The MCP adapter in `mcp/` works today and must keep working, but it is no longer where behaviour is designed or tested. Do no MCP-specific work before Phase 6 beyond what Phase 2A lists.
+The MCP adapter in `mcp/` is generated from the catalogue and must keep working, but it is not where behaviour is designed or tested. Do no MCP-specific work before Phase 6.
 
 ## Commands
 
 ```
 uv sync                      # install
-uv run pytest                # all tests (about 30 seconds)
+uv run pytest                # all tests but scenarios (about 45 seconds)
+uv run pytest -m scenario -s  # real-model scenarios: cost money, ask first
 uv run pytest tests/test_x.py -k name
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format
-uv run task-orchard info     # which database and timezone are in use
+uv run task-orchard info     # which database, timezone and models are in use
 TASK_ORCHARD_DB=/tmp/demo.db uv run task-orchard seed-demo   # a populated database to try things on
 ```
 
@@ -30,8 +31,8 @@ TASK_ORCHARD_DB=/tmp/demo.db uv run task-orchard seed-demo   # a populated datab
 src/task_orchard/
   config.py          settings from the environment
   cli.py             task-orchard command
-  tools.py           the tool catalogue: one function per operation, call_tool (Phase 2A)
-  guides.py          loads skills (Phase 2A; today it is mcp/guides.py)
+  tools.py           the tool catalogue: one function per operation, call_tool (done)
+  guides.py          loads skills (done)
   core/              all logic; imports nothing from tools, agent/, mcp/ or api/
     enums.py           every enumerated value (done)
     errors.py          OrchardError and friends (done)
@@ -51,22 +52,22 @@ src/task_orchard/
     types.py           UTCDateTime, IntEnumType (done)
     engine.py          engine, sessions, init_db (done)
     migrations/        Alembic
-  agent/             the app: Task Orchard's own assistant (Phase 2A)
-    model.py           Model protocol, AnthropicModel; the only importer of anthropic
+  agent/             the app: Task Orchard's own assistant (done)
+    model.py           Model protocol, AnthropicModel, tiers; the only importer of anthropic
     preamble.md        the fixed opening of the system prompt
-    prompt.py          builds the system prompt: preamble, guides, profile
-    loop.py            run_turn: the tool-use loop; MAX_STEPS
+    prompt.py          builds the system prompt: preamble, guides, profile; the [Now:] line
+    loop.py            Session, start_session, run_turn: the tool-use loop; MAX_STEPS
     chat.py            task-orchard chat and ask
   mcp/
-    server.py          FastMCP adapter; Phase 1-2 tools done. Tool definitions
-                       move to tools.py in Phase 2A and this becomes generic
-    guides.py          loads skills (done; moves up a level in Phase 2A)
+    server.py          FastMCP adapter: INSTRUCTIONS, get_guide, prompts, and every
+                       catalogue tool registered in a loop (done)
   api/               REST routes (Phase 6)
   skills/              one markdown file per skill: overview, triage, what-now
   devtools/seed.py     demo data, addressed by handle
 tests/
   conftest.py          fixtures: orchard, clock, seeded, session
-  scenarios/           real-model checks, run with `pytest -m scenario` (Phase 2A)
+  scripted.py          ScriptedModel and reply helpers for testing the app
+  scenarios/           real-model checks, run with `pytest -m scenario` (harness.py)
 ```
 
 ## Rules

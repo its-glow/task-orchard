@@ -4,6 +4,9 @@ TASK_ORCHARD_DB   Path to the SQLite file.
                   Default: $XDG_DATA_HOME/task-orchard/orchard.db
 TASK_ORCHARD_TZ   IANA timezone name for the user, e.g. "Europe/London".
                   Default: $TZ, then the system zone, then UTC.
+TASK_ORCHARD_MODEL_BASIC      The app's model for everyday conversation.
+TASK_ORCHARD_MODEL_STRATEGIC  The app's model for work that needs more thought.
+                  Both default to claude-haiku-5-5 (SPEC 10.2, two tiers).
 
 The timezone matters: date-only deadlines, "today", and recurrence schedules
 are all interpreted in it (SPEC section 3).
@@ -19,6 +22,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ENV_DB = "TASK_ORCHARD_DB"
 ENV_TZ = "TASK_ORCHARD_TZ"
+ENV_MODEL_BASIC = "TASK_ORCHARD_MODEL_BASIC"
+ENV_MODEL_STRATEGIC = "TASK_ORCHARD_MODEL_STRATEGIC"
+DEFAULT_MODEL = "claude-haiku-5-5"
+
+
+# Told to the model, by the app's prompt and the MCP server's instructions alike,
+# when no zone could be detected.
+TIMEZONE_WARNING = (
+    "Note: the user's timezone could not be detected, so UTC is being assumed. "
+    'Tell the user once that they should set TASK_ORCHARD_TZ (for example "Europe/London") '
+    "in the environment Task Orchard runs in."
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,8 @@ class Settings:
     # False when no zone could be detected and UTC was assumed. Surfaced by the
     # server's instructions so the agent can tell the user to set TASK_ORCHARD_TZ.
     timezone_detected: bool = True
+    model_basic: str = DEFAULT_MODEL
+    model_strategic: str = DEFAULT_MODEL
 
 
 def default_db_path(env: Mapping[str, str]) -> Path:
@@ -66,4 +83,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     db = Path(env[ENV_DB]).expanduser() if env.get(ENV_DB) else default_db_path(env)
     tz, detected = detect_timezone(env)
-    return Settings(db_path=db, timezone=tz, timezone_detected=detected)
+    return Settings(
+        db_path=db,
+        timezone=tz,
+        timezone_detected=detected,
+        model_basic=env.get(ENV_MODEL_BASIC) or DEFAULT_MODEL,
+        model_strategic=env.get(ENV_MODEL_STRATEGIC) or DEFAULT_MODEL,
+    )
