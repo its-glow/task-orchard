@@ -43,7 +43,8 @@ uv run task-orchard info      # which database and timezone will be used
 |---|---|---|
 | `TASK_ORCHARD_DB` | Path to the SQLite database file. | `~/.local/share/task-orchard/orchard.db` |
 | `TASK_ORCHARD_TZ` | Your timezone as an IANA name, such as `Europe/London`. | `$TZ`, then the system timezone, else UTC. |
-| `TASK_ORCHARD_MODEL` | The model the app talks to. *(From phase 2A.)* | `claude-opus-5-5` |
+| `TASK_ORCHARD_MODEL_BASIC` | The model for everyday conversation with the app. *(From phase 2A.)* | `claude-haiku-5-5` |
+| `TASK_ORCHARD_MODEL_STRATEGIC` | The model for work that needs more thought, chosen with `chat --strategic` or `/strategic`. *(From phase 2A.)* | `claude-haiku-5-5` |
 
 The app calls the Claude API, so from phase 2A it also needs credentials for that: `ANTHROPIC_API_KEY` in the environment, or a login made with the `ant` CLI. Task Orchard never stores the key. Model calls are billed to that account. Using Task Orchard from another assistant over MCP needs none of this.
 

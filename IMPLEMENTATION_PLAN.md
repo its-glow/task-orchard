@@ -395,7 +395,7 @@ Nothing here blocks Phases 0–3.
 1. **What the charter says about balance.** Not a build question, but the reserved places and the balance only pay off once the charter states an intent. Onboarding can leave this blank and the weekly review can raise it once there is a month of data.
 2. **Whether activation and drain are the right axes.** Accepted for now. Revisit after a few weeks of use, when the completion reflections show whether the two are actually distinguishable in practice.
 3. **Whether `field_sources` earns its keep.** It is the one piece of bookkeeping added for the guess-first approach. If it proves fiddly, the fallback is a single "confirmed by user" flag per task.
-4. **Which model runs which skill.** Housekeeping, triage and pattern filing look safe on a small model. Collaborative breakdown of a vague project and time-block planning may not be. The skill scenarios are how this gets answered, and with our own loop the answer can be acted on: the app's model is a setting, and unattended runs get their own. Until Phase 5 completes the scenarios it is a guess.
+4. **Which model runs which skill.** Housekeeping, triage and pattern filing look safe on a small model. Collaborative breakdown of a vague project and time-block planning may not be. The skill scenarios are how this gets answered, and with our own loop the answer can be acted on: the app has a basic and a strategic model setting, both Haiku by default, and either can be raised without code changes. Until Phase 5 completes the scenarios it is a guess.
 
 Deferred by agreement: logging suggestions that were not chosen (Phase 5), tuning when the agent closes parents unasked (later phase), calendar integration, the priority scale.
 
@@ -411,7 +411,7 @@ The original plan put the AI in an MCP client and treated the client as a free u
 |---|---|
 | The server asks the host to call `read_profile` and read the overview at the start of each conversation. | The profile and every guide are in the system prompt. Nothing is fetched and nothing can be skipped. |
 | Guides are offered three ways because hosts differ in what they surface. | One way, always present. |
-| "Built for a small model" is a hope about whichever model the host runs. | The model is a setting, and can differ between conversation and unattended upkeep. |
+| "Built for a small model" is a hope about whichever model the host runs. | Two model settings, basic and strategic, both Haiku by default. The user picks the tier, and either can be pointed at a larger model. |
 | Housekeeping and the morning and evening skills need an agent platform to run them. | They are runs of the app, started by the system scheduler. |
 | Skills are tested by hand, in a host, by reading what it did. | Scenarios run the real prompt and tools against a real model and assert on the calls and the end state. |
 | The server cannot see which suggestions the user was shown. | The loop can. |

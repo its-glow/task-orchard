@@ -33,7 +33,7 @@ This is the build document. It says exactly what each part does, so that impleme
    - the caller can adjust or switch it off with a parameter.
 
    What stays out of the server is opaque scoring: weighted formulas whose result the agent can neither explain nor override. When unsure, start with the agent deciding, and move logic into the server once real use shows the agent is being handed too much or is deciding badly.
-2. **Built for a small model.** Assume the caller is Haiku-class. Facts arrive ready to use. Tools validate everything and explain failures with a hint. A multi-step change is one atomic call. The app may be run on a larger model, but the tools and guides must not depend on one: the scenarios of section 10.2 run on a small model to check this.
+2. **Built for a small model.** Assume the caller is Haiku-class: by default the app runs on Claude Haiku 5.5 throughout (section 10.2). Facts arrive ready to use. Tools validate everything and explain failures with a hint. A multi-step change is one atomic call. The strategic tier may be pointed at a larger model, but the tools and guides must not depend on one: the scenarios of section 10.2 run on the defaults to check this.
 3. **Derived, not stored.** Nothing in section 5 or 6.1 is ever written to a column.
 4. **Context is a budget.** Every response is bounded (limits are stated per tool). Lists return compact rows. History reaches the model only as aggregates.
 5. **Every mutation is logged** in the same transaction as the change (section 6.4).
@@ -951,7 +951,9 @@ run_turn(session, user_text):
     repeat at most MAX_STEPS times:
         reply = session.model.respond(system, tools, messages)
         append the reply's content to messages, unchanged
-        if reply.stop is not "tool_use": return what the reply says (see below)
+        if reply.stop is not "tool_use":
+            if the reply holds any tool calls: append ONE user message answering each as not run
+            return what the reply says (see below)
         run each tool call in the reply through call_tool, in the order given
         append ONE user message holding every result, each marked is_error when it failed
     return the step-limit text
@@ -968,6 +970,9 @@ run_turn(session, user_text):
   | `max_tokens` | The reply's text, followed by `(The answer was cut off. Say "continue" for the rest.)` |
   | `refusal` | `The model declined to answer that.` |
 
+  Any other value (`stop_sequence`, `pause_turn`) is treated as `end`.
+- **Every tool call gets a result.** The API rejects a conversation in which a tool call is not followed by its result, and the append-only rule below means the call cannot be removed. A reply cut off by `max_tokens` can end part-way through a tool call, so when a turn ends on a reply that still holds tool calls, the loop appends one user message answering each of them with `is_error` and the payload `{"error": "not_run", "message": "This call was cut off and did not run.", "hint": "Call it again if it is still needed."}`. Nothing is run. Without this, every later turn of the session would fail.
+- **A user message may follow tool results.** When a turn ends at the step limit, or the model call fails, the conversation ends with a message of tool results, and the next turn's user message comes straight after it. The API joins consecutive user messages, so nothing special is done.
 - **If the model call itself fails** (network, credentials, rate limit after the SDK's own retries), the error is reported to the user and the turn ends. Nothing already appended is removed, including the results of tools that ran: those changes happened, and the model must still see them on the next turn.
 
 #### The session is append-only
@@ -979,7 +984,7 @@ This is a hard rule and not a style choice. Current models tie their reasoning t
 - **The profile is read once, when the session starts.** A `write_profile_note` during the session does not rebuild the prompt; the tool's result, which carries the whole profile, is how the model sees the change.
 - **The time travels with each user message**, not in the system prompt. Every user message begins with one line, `[Now: Fri 2026-11-20T17:00, Europe/London]`: the weekday, the `at` form of section 3.3, and the zone. Tool results carry `now` as well (section 4.1).
 - **The reply is passed back whole.** The loop reads the text and the tool calls out of a reply, but appends the reply's content exactly as received, including parts it does not understand.
-- **A long session is ended, not trimmed.** When a reply reports more than `SESSION_TOKEN_LIMIT = 150_000` input tokens, `chat` tells the user once that the session is getting long and that `/new` starts a fresh one. Memory lives in the server (profile, patterns, the tasks themselves), so a new session loses little. There is no summarising or dropping of old turns in this phase.
+- **A long session is ended, not trimmed.** When a reply reports more than `SESSION_TOKEN_LIMIT = 150_000` input tokens, `chat` tells the user once that the session is getting long and that `/new` starts a fresh one. Memory lives in the server (profile, patterns, the tasks themselves), so a new session loses little. There is no summarising or dropping of old turns in this phase. The API's server-side compaction is the expected next step: it summarises earlier turns into a block that the loop appends like any other, so the rule still holds. It is left to later work on the app (section 13).
 
 #### The system prompt
 
@@ -990,13 +995,29 @@ Built once per session by `agent/prompt.py`, in this order:
 3. **Every other guide**, in name order, each under a heading `## Guide: <name>` followed by its description and body.
 4. **The profile**: the result of `read_profile()` as JSON, under the heading `## The user's profile`.
 
-Parts 1 to 3 are one block, identical for every session until a release changes a guide, and are marked for prompt caching. Part 4 is a second block after it. Nothing that varies between sessions may appear before part 4.
+Parts 1 to 3 are one block, identical for every session until a release changes a guide, and are marked for prompt caching. Part 4 is a second block after it. Nothing that varies between sessions may appear before part 4. The conversation is cached too (section 10.2, the model).
 
 All guides go in, every time. They are short (section 9), and this removes both the tool call an outside assistant spends fetching one and the chance that it is skipped. If a small model proves to blur ten guides together, the first fix is to choose the guides for the session in code, not to bring back `get_guide`.
 
 #### The tools offered
 
 Every tool in the catalogue, in catalogue order, the same for the whole session. A guide written before a tool exists mentions it conditionally (section 13), so the model never calls a tool that is not there.
+
+#### Two tiers
+
+The app has two model settings:
+
+| Tier | Setting | Default | Effort | Meant for |
+|---|---|---|---|---|
+| basic | `TASK_ORCHARD_MODEL_BASIC` | `claude-haiku-5-5` | `medium` | Everyday conversation: capturing, triage, what now, completing, and the unattended runs of Phase 6. |
+| strategic | `TASK_ORCHARD_MODEL_STRATEGIC` | `claude-haiku-5-5` | `high` | Work that needs more thought: breaking down a vague project, planning a block of time, the weekly review, onboarding. |
+
+- **Both default to Haiku 5.5**, so the whole stack runs on the small model out of the box. Either setting can name a larger model with no change to code.
+- **Effort is fixed per tier** in `agent/model.py`, not a setting, so the tiers differ even when both name the same model.
+- **The user chooses the tier; code never does.** Choosing from what was asked would be a judgement made in code. A session starts on basic. `chat --strategic` and `ask --strategic` start on strategic, and in `chat`, `/strategic` and `/basic` switch for the turns that follow.
+- **A switch keeps the session.** Nothing already sent changes; the next request simply names the other model and effort. It costs one request that is not served from the cache, which belongs to one model and effort. If the model differs, the API also ignores the earlier reasoning blocks (it drops them, unbilled). Both are acceptable for an occasional, deliberate switch.
+- Scenarios and unattended runs name their tier (below, and section 12). The "meant for" column is a first guess; the scenarios of Phase 5 test it.
+- Letting the model ask for the strategic tier itself is left to later work on the app (section 13).
 
 #### The model
 
@@ -1010,16 +1031,19 @@ class Model(Protocol):
 `Reply` has `content` (the reply's blocks, opaque to the loop apart from text and tool calls), `stop` (`end`, `tool_use`, `max_tokens` or `refusal`) and `input_tokens` (everything the request sent, cached or not).
 
 - **`AnthropicModel`** uses the official `anthropic` SDK, a new dependency. It is the only module that imports it.
-  - The model id comes from `TASK_ORCHARD_MODEL`, default `claude-opus-5-5`.
+  - One `AnthropicModel` per tier: the model id comes from the tier's setting, and the effort from the table above.
   - Credentials are whatever the SDK finds for itself (`ANTHROPIC_API_KEY`, or a login profile). The app never reads, stores or prints a key.
   - One request per `respond`, not streamed, with `max_tokens` of 16,000.
-  - The request's shape (thinking, effort, cache markers, what to do about a refusal) follows the current Claude API documentation. Check it before writing; do not work from memory. Whatever it needs stays inside this module.
+  - **Caching.** Besides the marker on the stable block of the system prompt, the request uses the API's automatic caching, so the conversation so far is cached for the next call. A turn of several tool calls then pays full price only for what each call added. Each model has a minimum length below which nothing is cached; the first real run (Phase 2A, step 7) confirms from the usage figures that the cache is read.
+  - **Refusals.** Where the model supports a server-side fallback on a refusal, it is turned on. Haiku 5.5 does not, so on the default settings a refusal ends the turn as above.
+  - The request's exact shape (thinking, effort, cache markers, fallback) follows the current Claude API documentation. Check it before writing; do not work from memory. Whatever it needs stays inside this module.
 - **`ScriptedModel`**, in `tests/`, returns replies from a list and records what it was sent. Every test of the app uses it. The test suite never calls a model.
 
 #### `task-orchard chat` and `task-orchard ask`
 
 - **`task-orchard chat`** is a terminal conversation. Each line typed is a turn. The answer goes to stdout. One line per tool call goes to stderr as it happens, so the user can see what the model is doing: `-> get_candidates(minutes_available=30, energy="low")`, followed by ` !! <error code>` when the call failed.
-  - `/new` ends the session and starts another, which reads the profile again. `/quit`, or end of input, exits.
+  - `/new` ends the session and starts another, which reads the profile again and starts on basic. `/strategic` and `/basic` switch tier. `/quit`, or end of input, exits.
+  - The tier and model in use are printed to stderr when a session starts and on each switch.
   - `--transcript PATH` appends every message and tool outcome to that file as JSON lines.
 - **`task-orchard ask "<text>"`** runs one turn in a new session, prints the answer and exits: 0 on success, 1 if the model could not be reached.
 - With no usable credentials, both print how to supply them (set `ANTHROPIC_API_KEY`, or log in with the `ant` CLI) to stderr and exit 1, before asking for any input.
@@ -1033,7 +1057,7 @@ A scenario checks that a real model, given the app's prompt and tools, does the 
 - `tests/scenarios/`, one file per scenario: a database seeded by `seed_demo` at a fixed clock, one or more user messages, and what must then be true.
 - **Assert on what was called and on the end state, never on wording**: which tools were called and with which arguments that matter, which tools were not called, and what `Orchard` reads return afterwards.
 - They are pytest tests marked `scenario`. The default run excludes them (`-m "not scenario"` in `addopts`), and they skip when there are no credentials. Run them with `uv run pytest -m scenario`. They cost money and are never part of a phase's acceptance.
-- The model is `TASK_ORCHARD_SCENARIO_MODEL`, default `claude-haiku-5-5`: ground rule 2 says the tools and guides must work on a small model, and this is where that is checked.
+- Each scenario names its tier and runs on that tier's setting, so by default on Haiku 5.5: ground rule 2 says the tools and guides must work on a small model, and this is where that is checked. To see whether a larger model does better, set the tier's variable for the run.
 - Phase 2A adds two: "I've got 30 minutes and I'm tired" (expects `get_candidates` with `minutes_available=30` and `energy="low"`, and no write), and "Remind me to buy stamps, call Mum and fix the bike light" (expects one `capture_tasks` call with three items, and three more tasks in the inbox). Each later phase adds one per new skill.
 
 ### 10.3 The MCP adapter
@@ -1118,16 +1142,16 @@ This phase adds no operation and changes no behaviour of `core`. There is no sch
 3. **The MCP adapter.** Reduce `mcp/server.py` to: `INSTRUCTIONS`, `get_guide`, the prompts, and a loop that registers each catalogue tool. `test_mcp_phase1.py` and `test_mcp_phase2.py` must pass with no edit beyond that one import line; that is the proof nothing an MCP client sees has changed.
 4. **Guides for both settings.** Reword the three existing guides by the rule in section 9: the "Guides" section of `overview.md`, and step 1 of `triage.md` and `what-now.md`.
 5. **The app.** `agent/model.py`, `agent/preamble.md`, `agent/prompt.py`, `agent/loop.py`, `agent/chat.py`. Add `anthropic` to the dependencies in `pyproject.toml`, and change the project description there, which still says "with an MCP interface".
-6. **The commands.** `chat`, `ask` and `mcp` in `cli.py`; `TASK_ORCHARD_MODEL` and `TASK_ORCHARD_SCENARIO_MODEL` in `config.py`.
-7. **Scenarios.** The `scenario` marker, the harness, and the two scenarios of section 10.2. With the user's go-ahead, run them once and report the result.
+6. **The commands.** `chat`, `ask` and `mcp` in `cli.py`; `TASK_ORCHARD_MODEL_BASIC` and `TASK_ORCHARD_MODEL_STRATEGIC` in `config.py`.
+7. **Scenarios.** The `scenario` marker, the harness, and the two scenarios of section 10.2. With the user's go-ahead, run them once and report the result, including whether the usage figures show the cache being read.
 8. **The documents.** In `README.md`, make `task-orchard chat` the quick start and move the MCP client setup under "from another assistant". In `CLAUDE.md`, mark the new modules done.
 
 | Test module | Must prove |
 |---|---|
 | `test_tools.py` | The catalogue has one tool for every operation built so far, named as its `Orchard` method, in the order of section 8. Every schema is an object whose parameters each have a description; enumerated parameters list their names and still accept `"Must"`; `read_only` is set for exactly the read operations. `call_tool` returns the same dict as the `Orchard` method on success; turns an `OrchardError` into the JSON of section 4.2 with `is_error`; and answers an unknown tool, a missing required argument, a wrong type and an unknown parameter with `invalid` and a hint, having written nothing. |
 | `test_agent_prompt.py` | The four parts in order, the overview first and every other guide present under its heading. The profile block holds the charter and notes as they were when the session started. The block before it is identical for two sessions with different profiles. The timezone warning appears only when the zone was not detected. Every user message starts with the `[Now: …]` line, built from the clock. |
-| `test_agent_loop.py` | With `ScriptedModel`: a reply with no tool call ends the turn with its text. A tool call changes the database and its result goes back. Two calls in one reply run in order and their results go back in one message. An `OrchardError` goes back as a failed result and the loop continues, so a scripted retry succeeds. The step limit, `max_tokens` and `refusal` each end the turn with the stated text. Over several turns, the system prompt, the tool list and every earlier message of each request equal those of the request before it. A reply's content is passed back unchanged, including a block the loop does not know. A model that raises leaves the conversation as it was, including tool results already appended. |
-| `test_chat_cli.py` | With a scripted model injected: `ask` prints the answer and exits 0, and exits 1 when the model cannot be reached. `chat` answers on stdout and reports tool calls on stderr; `/new` starts a session that reads the profile again; `/quit` and end of input exit; `--transcript` writes one JSON line per message and tool outcome; the long-session notice appears once. Missing credentials give the stated message and exit 1 before any input is read. |
+| `test_agent_loop.py` | With `ScriptedModel`: a reply with no tool call ends the turn with its text. A tool call changes the database and its result goes back. Two calls in one reply run in order and their results go back in one message. An `OrchardError` goes back as a failed result and the loop continues, so a scripted retry succeeds. The step limit, `max_tokens` and `refusal` each end the turn with the stated text. A reply cut off with a tool call in it gets a `not_run` result for that call, nothing runs, and in the next request every tool call is followed by its result. Over several turns, the system prompt, the tool list and every earlier message of each request equal those of the request before it. A reply's content is passed back unchanged, including a block the loop does not know. A model that raises leaves the conversation as it was, including tool results already appended. |
+| `test_chat_cli.py` | With a scripted model injected: `ask` prints the answer and exits 0, and exits 1 when the model cannot be reached. `chat` answers on stdout and reports tool calls on stderr; `/new` starts a session that reads the profile again; `/quit` and end of input exit; `--transcript` writes one JSON line per message and tool outcome; the long-session notice appears once. A session starts on the basic tier's model; `--strategic`, `/strategic` and `/basic` select the other tier's model and effort, and a switch keeps every earlier message. Missing credentials give the stated message and exit 1 before any input is read. |
 | `test_mcp_adapter.py` | Through the in-memory client: the server lists exactly the catalogue's tools plus `get_guide`, with the catalogue's descriptions; one read, one write and one error round-trip. |
 | `test_layering.py` | By reading the imports of every module: `core` imports nothing from `tools`, `agent`, `mcp` or `api`; `tools` imports nothing from `agent`, `mcp` or `api`; `agent` and `mcp` import nothing from each other; only `agent/model.py` imports `anthropic`. |
 
@@ -1167,7 +1191,7 @@ Build: full pattern digests, the balance, `get_review_queue`, `get_recent_activi
 | `test_settings.py` | `set_timezone` stores the zone and the next call uses it; an unknown name is `invalid`; `TASK_ORCHARD_TZ` still wins. |
 | `test_response_size.py` | With 500 generated tasks, every read tool's response stays under 20,000 characters. |
 
-**Skill scenarios.** The harness and the first scenarios exist from Phase 2A, and each phase since has added one per skill (section 10.2). By the end of this phase every skill has at least one. Run the whole set on the small model and on the app's default model, and report to the user which skills the small model handles well enough. That answers which model should run which skill, and sets the default for unattended runs in Phase 6.
+**Skill scenarios.** The harness and the first scenarios exist from Phase 2A, and each phase since has added one per skill (section 10.2). By the end of this phase every skill has at least one. Run the whole set on the defaults (both tiers on Haiku 5.5), then with the strategic tier on a larger model, and report to the user which skills the small model handles well enough. That answers which tier each skill belongs in, and whether the strategic default should change.
 
 Also revisit, with the user, whether to log suggestions that were offered and not chosen. This would be a signal of its own, closer to "avoided" than "engaged", and is deliberately not a touch (section 5.6). The server cannot see what an agent showed the user. The app can: its loop holds the shortlist the model was given and the answer it wrote, so it could record the offer itself, at no cost in tool calls. An outside assistant would still have to report it. Decide whether the signal is worth having when only the app supplies it.
 
@@ -1187,7 +1211,7 @@ To be detailed before it starts; the shape is fixed. Through Phase 5 Task Orchar
   - make sure each response carries the next-step hint an assistant needs when it has not read the guide, as `skipped` and `recurrence_check` already do;
   - confirm in the user's host (Goose or another) that tools are callable, and note in `README.md` whether it surfaces MCP prompts and server instructions.
 - **The app over HTTP.** A chat endpoint that runs the loop of section 10.2 for a remote client, which is what the Android app's conversation needs. It requires conversations to be stored between requests, and so a schema change.
-- **Unattended runs.** `task-orchard run <skill>` runs the app for one turn with nobody present, for `housekeeping`, `morning-plan` and `evening-reflection`. The model is `TASK_ORCHARD_JOB_MODEL`, default `claude-haiku-5-5`. The run's final answer is stored as a report (a new table) and shown at the start of the next session. Task Orchard still starts nothing by itself: the operating system's scheduler (cron or a systemd timer) runs the command, and the deployment notes say how. Getting a report to the user without their opening a session is Phase 7.
+- **Unattended runs.** `task-orchard run <skill>` runs the app for one turn with nobody present, for `housekeeping`, `morning-plan` and `evening-reflection`. It uses the basic tier, or the strategic tier with `--strategic`. The run's final answer is stored as a report (a new table) and shown at the start of the next session. Task Orchard still starts nothing by itself: the operating system's scheduler (cron or a systemd timer) runs the command, and the deployment notes say how. Getting a report to the user without their opening a session is Phase 7.
 - **Agent platforms.** Hermes, OpenClaw or similar can connect over MCP and use their own scheduling in place of the unattended runs above. Deployment notes for one are written only if the user decides to run it.
 - **Backups.** Document a nightly `sqlite3 .backup` of the database file.
 
@@ -1266,7 +1290,10 @@ Decisions made while specifying, which go beyond `IMPLEMENTATION_PLAN.md`:
 | Guides in the prompt | The app puts every guide and the profile in its system prompt, in place of `get_guide` and the session-start `read_profile`. Guides are worded to hold in both settings. |
 | Append-only sessions | Within a session the app never edits, re-orders or drops what it has already sent. So the profile is read once per session, the time is carried in each user message and not in the system prompt, and a long session is ended with `/new`, not trimmed or summarised. |
 | Step limit | A turn is at most 12 model calls. This bounds one turn only; the user can say "continue". |
-| Models | The app's model is a setting, default `claude-opus-5-5`. Scenarios default to `claude-haiku-5-5`, because ground rule 2 still holds: the tools and guides must work on a small model whatever the app is run on. Unattended runs (Phase 6) default to the small model. |
+| Models | Two tiers, basic and strategic, each a setting that names a model, both defaulting to `claude-haiku-5-5`. Effort is fixed per tier (`medium`, `high`). The user picks the tier and code never does. This makes ground rule 2 true of the whole stack, not just of a test, and leaves a larger model one setting away for the work that needs it. Scenarios and unattended runs use the same two settings, so there are no others. |
+| Unanswered tool calls | A turn that ends on a reply still holding tool calls (cut off, or refused) answers each with a `not_run` result. The API rejects a tool call with no result, and the append-only rule forbids removing it, so without this one cut-off reply would break the rest of the session. |
+| Caching | The stable part of the system prompt and the conversation so far are both cached, the second with the API's automatic caching. Every model call in a turn re-sends the whole conversation, so caching only the system prompt would leave most of the cost in place. |
+| Compaction and the agent side | Not used in Phase 2A: a long session ends with `/new`. Server-side compaction fits the append-only rule (the summary arrives as a block the loop appends like any other) and is the expected next step. It belongs with the wider work on how the app manages the model's context and choices, which is expected to grow: compaction, choosing guides per session, letting the model ask for the strategic tier. |
 | Model seam | The loop reaches a model only through the `Model` protocol. One module imports the vendor SDK, and tests use a scripted model. The loop is written by hand, not taken from an SDK helper, so that the append-only rule, the step limit and the transcript are in our code and testable. |
 | Scenarios | Run through the app's loop by `pytest -m scenario`, from Phase 2A, in place of the plan's manual scripts in Goose. They assert on tool calls and end state, are excluded from the normal run, and are never part of acceptance. |
 | REST views | REST routes do not return the model-facing rows of section 4, as the plan had it. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
