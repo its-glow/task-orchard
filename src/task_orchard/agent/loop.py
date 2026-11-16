@@ -85,9 +85,8 @@ def start_session(
 ) -> Session:
     """A new session: the profile is read now, once, and the prompt fixed."""
     tools = catalogue(orchard)
-    system = system_prompt(
-        load_guides(), orchard.read_profile(), timezone_detected=timezone_detected
-    )
+    known = timezone_detected or orchard.stored_timezone() is not None
+    system = system_prompt(load_guides(), orchard.read_profile(), timezone_detected=known)
     specs = [
         {"name": t.name, "description": t.description, "input_schema": t.input_schema}
         for t in tools

@@ -28,8 +28,10 @@ The operations are listed in SPEC section 8, with their phase.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import zoneinfo
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -85,6 +87,7 @@ from task_orchard.db.models import (
     Completion,
     Pattern,
     ProfileNote,
+    Setting,
     Task,
     TaskBlock,
 )
@@ -179,17 +182,27 @@ class Orchard:
         session_factory: sessionmaker[Session],
         clock: Clock,
         tz: ZoneInfo,
+        *,
+        tz_fixed: bool = False,
     ) -> None:
+        """`tz` is the zone from the environment. Unless `tz_fixed` (TASK_ORCHARD_TZ
+        was set), a zone stored by set_timezone takes its place (SPEC 3.1)."""
         self._session_factory = session_factory
         self._clock = clock
         self.tz = tz
+        self.tz_fixed = tz_fixed
 
     @classmethod
     def open(cls, settings: Settings, clock: Clock | None = None) -> Orchard:
         """Open (and if needed create and migrate) the database in `settings`."""
         engine = make_engine(settings.db_path)
         init_db(engine)
-        return cls(make_session_factory(engine), clock or SystemClock(), settings.timezone)
+        return cls(
+            make_session_factory(engine),
+            clock or SystemClock(),
+            settings.timezone,
+            tz_fixed=settings.timezone_explicit,
+        )
 
     @property
     def engine(self) -> sa.Engine:
@@ -200,8 +213,51 @@ class Orchard:
         """One operation, one transaction, with the clock caught up first."""
         now = self._clock.now()
         with self._session_factory() as session, session.begin():
-            recur.roll_forward(session, now, self.tz)
-            yield Tx(session=session, now=now, tz=self.tz)
+            tz = self._zone(session)
+            recur.roll_forward(session, now, tz)
+            yield Tx(session=session, now=now, tz=tz)
+
+    def _zone(self, session: Session) -> ZoneInfo:
+        if self.tz_fixed:
+            return self.tz
+        setting = session.get(Setting, 1)
+        if setting is None or setting.timezone is None:
+            return self.tz
+        return ZoneInfo(setting.timezone)
+
+    # --- set_timezone (8.19) ---
+
+    def set_timezone(self, name: str) -> dict[str, Any]:
+        zone = _zone_named(name)
+        with self.tx() as tx:
+            s = tx.session
+            setting = s.get(Setting, 1)
+            if setting is None:
+                setting = Setting(id=1, updated_at=tx.now)
+                s.add(setting)
+            if setting.timezone != zone:
+                record(
+                    s,
+                    EventType.SETTINGS_SAVED,
+                    at=tx.now,
+                    payload={"timezone": {"from": setting.timezone, "to": zone}},
+                )
+                setting.timezone = zone
+                setting.updated_at = tx.now
+            note = None
+            if self.tz_fixed and self.tz.key != zone:
+                note = (
+                    f"Stored, but TASK_ORCHARD_TZ is set to {self.tz.key} in this client's "
+                    "environment and overrides it. Tell the user to remove or change it."
+                )
+            shown = Tx(session=s, now=tx.now, tz=tx.tz if note else ZoneInfo(zone))
+            return self._respond(shown, {"timezone": zone, "note": note})
+
+    def stored_timezone(self) -> str | None:
+        """The zone set_timezone stored, if any. For start-up checks, not for the model."""
+        with self._session_factory() as session:
+            setting = session.get(Setting, 1)
+            return None if setting is None else setting.timezone
 
     # --- Helpers ---
 
@@ -2182,3 +2238,20 @@ def _number_in_range(value: Any, param: str, low: float, high: float) -> float:
             hint=f"For example {param}=1 or {param}=0.5.",
         )
     return float(value)
+
+
+def _zone_named(name: Any) -> str:
+    """The canonical IANA name for `name`, ignoring case."""
+    if isinstance(name, str) and name.strip():
+        found = _zone_names().get(name.strip().casefold())
+        if found is not None:
+            return found
+    raise Invalid(
+        f"{name!r} is not a timezone name.",
+        hint='Use an IANA name such as "Europe/London" or "America/New_York".',
+    )
+
+
+@functools.cache
+def _zone_names() -> dict[str, str]:
+    return {zone.casefold(): zone for zone in zoneinfo.available_timezones()}

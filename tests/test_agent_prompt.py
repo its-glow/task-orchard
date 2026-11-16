@@ -66,6 +66,9 @@ def test_the_timezone_warning_only_when_not_detected(orchard: Orchard, clock: Fi
     loud = start_session(orchard, clock, models(), timezone_detected=False)
     assert TIMEZONE_WARNING not in quiet.system[0]["text"]
     assert TIMEZONE_WARNING in loud.system[0]["text"]
+    orchard.set_timezone("Europe/London")  # confirmed with the user: no longer a guess
+    settled = start_session(orchard, clock, models(), timezone_detected=False)
+    assert TIMEZONE_WARNING not in settled.system[0]["text"]
 
 
 def test_every_user_message_starts_with_the_time(orchard: Orchard, clock: FixedClock) -> None:

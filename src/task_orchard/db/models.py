@@ -342,3 +342,18 @@ class ProfileNote(Base):
     text: Mapped[str] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class Setting(Base):
+    """Settings that live with the data rather than the environment. One row.
+
+    `timezone` is the IANA name confirmed with the user (SPEC 3.1, 8.19), so
+    clients started with different environments agree on what "today" is.
+    """
+
+    __tablename__ = "settings"
+    __table_args__ = (sa.CheckConstraint("id = 1", name="one_row"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    timezone: Mapped[str | None] = mapped_column(sa.String(64))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)

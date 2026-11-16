@@ -31,8 +31,8 @@ DEFAULT_MODEL = "claude-haiku-5-5"
 # when no zone could be detected.
 TIMEZONE_WARNING = (
     "Note: the user's timezone could not be detected, so UTC is being assumed. "
-    'Tell the user once that they should set TASK_ORCHARD_TZ (for example "Europe/London") '
-    "in the environment Task Orchard runs in."
+    "Ask the user once which timezone they are in, and save it with set_timezone "
+    '(an IANA name such as "Europe/London").'
 )
 
 
@@ -43,6 +43,8 @@ class Settings:
     # False when no zone could be detected and UTC was assumed. Surfaced by the
     # server's instructions so the agent can tell the user to set TASK_ORCHARD_TZ.
     timezone_detected: bool = True
+    # TASK_ORCHARD_TZ was set: it overrides the zone stored in the database (SPEC 3.1).
+    timezone_explicit: bool = False
     model_basic: str = DEFAULT_MODEL
     model_strategic: str = DEFAULT_MODEL
 
@@ -87,6 +89,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_path=db,
         timezone=tz,
         timezone_detected=detected,
+        timezone_explicit=bool(env.get(ENV_TZ)),
         model_basic=env.get(ENV_MODEL_BASIC) or DEFAULT_MODEL,
         model_strategic=env.get(ENV_MODEL_STRATEGIC) or DEFAULT_MODEL,
     )

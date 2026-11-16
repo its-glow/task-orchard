@@ -63,9 +63,19 @@ def _init(args: argparse.Namespace) -> int:
 
 def _info(args: argparse.Namespace) -> int:
     settings = load_settings()
-    detected = "" if settings.timezone_detected else "  (not detected; set TASK_ORCHARD_TZ)"
+    stored = Orchard.open(settings).stored_timezone() if settings.db_path.exists() else None
+    if settings.timezone_explicit:
+        zone = f"{settings.timezone.key}  (from TASK_ORCHARD_TZ)"
+        if stored and stored != settings.timezone.key:
+            zone += f"; overrides {stored}, stored by set_timezone"
+    elif stored:
+        zone = f"{stored}  (stored by set_timezone)"
+    elif settings.timezone_detected:
+        zone = f"{settings.timezone.key}  (from the system)"
+    else:
+        zone = f"{settings.timezone.key}  (not detected; set it with set_timezone)"
     print(f"database: {settings.db_path}")
-    print(f"timezone: {settings.timezone.key}{detected}")
+    print(f"timezone: {zone}")
     print(f"model, basic: {settings.model_basic}")
     print(f"model, strategic: {settings.model_strategic}")
     return 0
