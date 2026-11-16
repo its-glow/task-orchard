@@ -2,7 +2,7 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion) and 4 (recurrence) are done and tested; the six scenarios of Phases 2A to 4 pass on Claude Haiku 5.5. Phases 5 and 6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion), 4 (recurrence) and 5 (learning and review) are done and tested; the eleven scenarios pass on Claude Haiku 5.5, and the strategic ones also on Claude Sonnet 5.5. Phase 6 is specified here and not yet built.
 
 **How it is used.** Task Orchard has its own assistant, called the app: a loop that talks to a model and calls the operations of section 8 directly (section 10.2). The app is the primary way in, and behaviour is designed and tested against it. Other assistants reach the same operations over MCP, and programs over REST; both are adapters built out in Phase 6 (section 12).
 
@@ -191,12 +191,12 @@ Used in every list. Built by `views.task_row`. Keys appear in this order; all ar
 | `snoozed_until` | Stamp, when dormant by the task's own snooze. |
 | `blocked_by` | Up to 3 open effective blockers as `{id, title}`, plus `blocked_by_more: n` if there are others. |
 | `unblocks` | Count of open tasks this task explicitly blocks. |
-| `conditions` | |
+| `conditions` | At most 5 tags of at most 30 characters each (section 8.2). |
 | `touched` | `rel` of `last_touched` (section 5.6), when more than 1 day ago. Omitted for recurring tasks. |
 | `deferred` | Times deferred (section 5.6). |
 | `starts` | Times started (section 5.6). |
 | `recurring` | For recurring tasks: `{mode, cadence, gap_days, last_done, done_count, past_wake_days, next_slot}` as applicable (section 7). |
-| `pattern` | `{id, name, hint, ratio}`. `hint` is the pattern's `learned` note cut to 120 characters. `ratio` is the estimate ratio (section 6.1) when it rests on at least 3 completions. |
+| `pattern` | `{id, name, hint, ratio}`. `name` is cut to 40 characters like a nested title. `hint` is the pattern's `learned` note cut to 120 characters. `ratio` is the estimate ratio (section 6.1) when it rests on at least 3 completions. |
 
 List tools may add keys to a row; each tool says which.
 
@@ -401,6 +401,8 @@ A pattern's members are the tasks with that `pattern_id`, **excluding recurring 
 | `last_done` | Stamp of the most recent completion. |
 | `gaps_days` | Days between consecutive completions, most recent 5 gaps, one decimal place. Only when the pattern has at least 2 completions. |
 
+Medians and `gaps_days` are given to one decimal place, and a whole number is written without one (`45`, not `45.0`). `description` is cut to 600 characters, the limit `save_pattern` enforces (section 8.17).
+
 A digest is at most this fixed set of keys. It is the only form in which history reaches the model.
 
 ### 6.2 Profile and charter
@@ -413,7 +415,7 @@ A digest is at most this fixed set of keys. It is the only form in which history
 
 ### 6.3 The balance
 
-For each of the windows "last 7 days" and "last 30 days" (by `completed_at`):
+For each of the windows "last 7 days" and "last 30 days" (by `completed_at`), under the keys `last_7_days` and `last_30_days`:
 
 ```json
 {"minutes": {"want": 240, "should": 90, "must": 1260, "unset": 45},
@@ -463,10 +465,10 @@ Items are **slim rows**: `{id, title, path?}` plus the keys the section names, n
 | `overdue` | Leaves whose own deadline has passed, longest overdue first. Each adds `overdue_days` and `firmness`. |
 | `most_deferred` | Open tasks with `deferred > 0`, highest first. Each adds `deferred`. |
 | `repeat_starts` | Open tasks with `starts > 1`, highest first. Each adds `starts`. |
-| `untouched` | Triaged leaves, by `last_touched`, oldest first. Each adds `untouched_days`. Dormant tasks are excluded. |
-| `duplicates` | Pairs of open tasks whose normalised titles are equal: `{a: {id, title}, b: {id, title}}`. A pair within one recurring family (a recurring task and its instance, or two instances of the same task) is not a duplicate: instances share their recurring task's title by design. |
+| `untouched` | Triaged leaves, by `last_touched`, oldest first. Each adds `untouched_days`. Dormant tasks and recurring tasks (containers) are excluded. |
+| `duplicates` | Pairs of open tasks whose normalised titles are equal: `{a: {id, title}, b: {id, title}}`, with `a` the lower id. Three tasks with one title make three pairs. Ordered by `a`, then `b`. A pair within one recurring family (a recurring task and its instance, or two instances of the same task) is not a duplicate: instances share their recurring task's title by design. |
 | `conflicts` | `conflict` events from the last 30 days on tasks that are still open: `{task: {id, title}, field, kept, proposed, source, when}`. |
-| `missed` | Per scheduled recurring task with instances missed in the last 30 days: `{recurring: {id, title}, missed: n, done: n}`. |
+| `missed` | Per scheduled recurring task with instances missed in the last 30 days: `{recurring: {id, title}, missed: n, done: n}`, both counted over the same 30 days, most missed first. |
 
 A **normalised title** is case-folded, with runs of whitespace collapsed and punctuation removed from either end. `Call Mum!` and `call  mum` are equal; `call-mum` is a different title.
 
@@ -475,7 +477,7 @@ A **normalised title** is case-folded, with runs of whitespace collapsed and pun
 For the last `days` (1 to 31):
 
 - `completed`: up to 30 `{id, title, actual_minutes, motive, when}`, newest first, plus `completed_count`.
-- `dropped`, `missed`: up to 10 each as `{id, title, when, reason?}`, plus counts.
+- `dropped`, `missed`: up to 10 each as `{id, title, when, reason?}`, newest first, plus counts. A task counts when its status is still `dropped` or `missed` and its closing event (`dropped`, `merged` or `missed`) falls in the window, so a task dropped and then reopened is not listed. A merged task's `reason` is `merged into #<id>`.
 - `created_count`, `deferred_count`, `started_count`.
 - `balance`: section 6.3, always both windows whatever `days` is.
 
@@ -627,7 +629,7 @@ Create a triaged task with whatever is known.
 | `estimate_minutes?` | Integer above 0. |
 | `activation?`, `drain?` | `low`, `medium`, `high`. |
 | `motive?` | `want` (the user wants to), `should` (self-imposed; nobody else is waiting), `must` (someone else requires it). |
-| `conditions?` | Array of tags. Each is lowercased and trimmed, with spaces turned into hyphens. |
+| `conditions?` | Array of tags. Each is lowercased and trimmed, with spaces turned into hyphens. At most 5 tags, each at most 30 characters; more is `invalid`, with the hint that a condition is a short tag. |
 | `pattern_id?` | |
 | `blocked_by?`, `blocks?` | Arrays of ids; each must be open. Cycle-checked together with the parent. A recurring task may not be among `blocked_by` (section 7.3). |
 | `recurrence?` | Section 8.2.1. |
@@ -786,8 +788,9 @@ Fold a duplicate into the task that should survive.
 - `source_id`, `into_id`: both open, different, neither recurring nor an instance (`unsupported`). Neither may be an ancestor of the other.
 - The source's children move under the target. The source's blocker links are re-pointed at the target; links that would duplicate an existing one or point at the target itself are discarded. The result is cycle-checked.
 - For each tracked field the target lacks and the source has, the value and its source entry are copied. So is `pattern_id`, if the target has none.
-- The source's title, description and notes are appended to the target's notes under a line `Merged from #<id>: <title>`.
-- The source becomes `dropped`.
+- The source's title, description and notes are appended to the target's notes under a line `Merged from #<id>: <title>`. If that would pass the 20,000-character limit on notes, the appended part is cut to fit and ends with `… (cut to fit; see #<id>)`; the source stays readable.
+- If open children moved, the target becomes `achievable: no`, as with any other way of adding a child (section 8.2).
+- The source becomes `dropped`. It is logged as `merged`, not `dropped` (section 6.4).
 - Returns `{task}` (the target).
 
 ### 8.12 `get_task`, `get_tree`, `search_tasks` — Phase 1
@@ -847,7 +850,7 @@ Section 6.5. No parameters. Returns one key per section, each `{items: [...], to
 
 ### 8.16 `get_recent_activity` — Phase 5
 
-Section 6.6. `days?`: 1 to 31, default 1.
+Section 6.6. `days?`: 1 to 31, default 1 (the last 24 hours). Outside that range is `invalid`.
 
 ### 8.17 `find_patterns`, `save_pattern` — Phase 3 (digest statistics in Phase 5)
 
@@ -857,12 +860,12 @@ Section 6.6. `days?`: 1 to 31, default 1.
 
 - Without `pattern_id`: creates a pattern; `name` is required. If the name exists (ignoring case), `invalid` with the existing id in `details`.
 - With `pattern_id`: changes the fields given.
-- `learned` is at most 600 characters (`invalid` if longer, with the hint to rewrite it shorter, not to append).
+- `learned` is at most 600 characters (`invalid` if longer, with the hint to rewrite it shorter, not to append). So is `description`.
 - `merge_from_id`: moves that pattern's tasks to `pattern_id` and deletes it. The agent supplies the combined `learned` in the same call. The merge happens before any rename, so the surviving pattern may take the merged one's name. Merging a pattern into itself, or `merge_from_id` without `pattern_id`, is `invalid`.
 - Blank `description` or `learned` clears it. Names are trimmed with spacing collapsed, and are at most 200 characters.
 - Returns `{pattern: digest}`.
 
-In Phase 3 a digest contains the stored fields and the status counts only; the remaining statistics arrive in Phase 5.
+In Phase 3 a digest contained the stored fields and the status counts only; Phase 5 added the remaining statistics.
 
 ### 8.18 `read_profile`, `write_profile_note` — Phase 2
 
@@ -872,7 +875,7 @@ In Phase 3 a digest contains the stored fields and the status counts only; the r
 
 ### 8.19 `set_timezone` — Phase 5
 
-`set_timezone(name)`: an IANA name such as `Europe/London`, stored in the database (a one-row `settings` table, added in Phase 5). An unknown name is `invalid`, with the hint to use a name like `Europe/London` or `America/New_York`. Takes effect from the next call. `TASK_ORCHARD_TZ` in the environment still overrides it (section 3.1). Returns `{timezone, now}`. Called by onboarding once the user has confirmed the zone shown in `now`.
+`set_timezone(name)`: an IANA name such as `Europe/London`, stored in the database (a one-row `settings` table, added in Phase 5). The name is matched ignoring case (`europe/london` is stored as `Europe/London`). An unknown name is `invalid`, with the hint to use a name like `Europe/London` or `America/New_York`. Takes effect from the next call. Saving the zone already stored changes nothing and writes no event. `TASK_ORCHARD_TZ` in the environment still overrides it (section 3.1). Returns `{timezone, now}`, with `now` already in the new zone; when the environment overrides it, `now` stays in the environment's zone and a `note` says so. Called by onboarding once the user has confirmed the zone shown in `now`.
 
 ### 8.20 `get_guide` — done
 
@@ -882,14 +885,14 @@ This is a tool of the MCP adapter only, for outside assistants that have no othe
 
 ## 9. Skills
 
-A skill is one markdown file in `src/task_orchard/skills/`, in the format the guide loader (`guides.py`) parses: a header with `name` and `description`, then the instructions. The app puts every guide in its system prompt (section 10.2). For outside assistants the same file is served as an MCP prompt and through `get_guide`. `overview.md`, `triage.md` and `what-now.md` exist.
+A skill is one markdown file in `src/task_orchard/skills/`, in the format the guide loader (`guides.py`) parses: a header with `name` and `description`, then the instructions. The app puts every guide in its system prompt (section 10.2). For outside assistants the same file is served as an MCP prompt and through `get_guide`. Every skill in the table below up to Phase 5 exists: `overview`, `triage`, `what-now`, `subdivide`, `complete-and-reflect`, `onboarding`, `plan-time-block`, `housekeeping` and `weekly-review`.
 
 Rules for writing every skill:
 
 - Address the agent directly. State the goal first, then numbered steps.
 - Name the exact tools to call. Assume a small model: be explicit about order and about when to stop.
 - State what to do without asking and what to ask about.
-- Keep each under about 600 words.
+- Keep each under about 600 words. `overview` may run to 800, since it is the map of all the others.
 - **Write for both settings.** In the app the guides and the profile are already in the prompt; in an outside assistant they are not. So a guide never says "call `get_guide`" or "call `read_profile`" outright. It says "if the profile is not already in front of you, call `read_profile`", and names another guide as "the `subdivide` guide", leaving how it is reached to the setting.
 - **Mention a tool that does not exist yet conditionally** ("if you have `snooze_task`"), so a small model never calls a tool that is not there.
 - When a phase adds tools, update `overview.md` if a concept changed. The session-start routine lives in two places: the app's preamble (section 10.2) and `INSTRUCTIONS` in `mcp/server.py`. Change them only if that routine changes, and keep them in step.
@@ -910,9 +913,9 @@ What each must contain:
 | `what-now` | 2 | Map the request to a tool: one task or a few options → `get_candidates`; "what's urgent" → `get_critical`. Pass `minutes_available` and `energy` only if the user said them or they would change the answer. Narrow with `under_id`, `min_priority` or `due_within_days` when the user asks about one project, only important things, or a time window, or when `pool.cut` shows much was left out. Rank using the facts, the profile and the charter. Offer 1 to 5 options, each with a one-line reason drawn from the row's facts. When giving several, spread them across motives and say which is which. For a high-activation pick, propose a smaller first step. If a pick has `achievable` of `no` or `unknown`, hand off to `subdivide`. A flexible recurring candidate (its row has `recurring`) is offered as itself ("go for a run?"); completing it records an occurrence. If `inbox` is above zero and the user has time, offer to triage first, since inbox tasks are never candidates. If the user declines an option as "not now", call `snooze_task`. When an offered task's soft deadline is long past, ask once whether to re-date it or clear it, so stale dates do not crowd the shortlist before housekeeping exists. |
 | `subdivide` | 3 | Read the task with `get_task`. Break down **one layer only**, into 2 to 7 children that are each achievable or clearly need their own breakdown later. Use `sequential` or `after` only where order is real. Act alone when the breakdown is obvious; otherwise propose it and ask. Never plan the whole tree. Stop after two levels in one turn. Call `subdivide_task` once. |
 | `complete-and-reflect` | 3 | Find the task first with `search_tasks(status="any")`; decide between existing, recurring and new (section 8.7). Ask one short question about how it went if the user did not say. Fill `actual_minutes`, `felt_activation`, `felt_drain` from their words. File a pattern: reuse when the match is clear, ask when not. For an occurrence of a recurring task, reuse the pattern its earlier occurrences were filed under; patterns are never assigned automatically. Handle `parent_check`: close or continue without asking when obvious, and say what was done. Handle `recurrence_check` (Phase 4). Update the pattern's `learned` note when the reflection teaches something general. |
-| `onboarding` | 5 | Explain the idea in four sentences. Draft the charter with the user and save it. Confirm the timezone shown in `now` and save it with `set_timezone`. Take a brain-dump with `capture_tasks`, then run `triage`. Ask about fixed obligations and habits and set up recurrence. Seed two or three profile notes. |
+| `onboarding` | 5 | Offered by `overview` when there is no charter. Explain the idea in four sentences. Draft the charter with the user and save it. Confirm the timezone shown in `now` and save it with `set_timezone`. Take a brain-dump with `capture_tasks`, then run `triage`. Ask about fixed obligations and habits and set up recurrence. Seed two or three profile notes. |
 | `plan-time-block` | 5 | Take the block length and energy. Call `get_candidates` with them and `get_recent_activity` for the balance. Read the charter. Build an ordered plan that fits, with a buffer of about a fifth of the block, a high-activation item early, and a share for wants as the charter directs. Present it as a short list with times. |
-| `housekeeping` | 5 | Call `get_review_queue`. Without asking: merge exact duplicates, clear or re-date soft deadlines long past on low-priority tasks, consolidate profile notes that overlap. Never drop a task or change a `user`-sourced field without asking. Report what was done in a few lines and list what needs the user's decision. |
+| `housekeeping` | 5 | Call `get_review_queue`. Without asking: merge exact duplicates, clear soft deadlines long past on low-priority tasks when the deadline was not set by the user, consolidate profile notes that overlap. It never picks a new date. Never drop a task or change a `user`-sourced field without asking. Report what was done in a few lines and list what needs the user's decision. |
 | `weekly-review` | 5 | With the user. Walk `get_review_queue` and `get_recent_activity(days=7)`: what was done, the balance against the charter, what keeps being deferred or restarted, missed recurrences, conflicts. For each stale item offer: drop, reshape, or recommit. Revisit the charter if the balance is far from it. |
 | `morning-plan`, `evening-reflection` | 6 | For unattended runs of the app (section 12), where nobody is there to answer a question. Morning: `get_critical`, then a plan for the day. Evening: `get_recent_activity`, collect reflections on anything completed without one. |
 
@@ -1011,7 +1014,7 @@ This is a hard rule and not a style choice. Current models tie their reasoning t
 
 Built once per session by `agent/prompt.py`, in this order:
 
-1. **The preamble**, `agent/preamble.md`: fixed text that takes over the job of the MCP adapter's `INSTRUCTIONS`. It says what Task Orchard is and that the model makes the judgements; that the guides below are its instructions and the one for a job is to be followed; that the profile below was current when the conversation started; that ids come only from tool results; that times are used as given and never calculated; and that an error's hint says how to correct the call. When the timezone was not detected, it ends with a warning. That text is `TIMEZONE_WARNING` in `config.py`, so the preamble and the MCP adapter's `INSTRUCTIONS` share it without importing each other.
+1. **The preamble**, `agent/preamble.md`: fixed text that takes over the job of the MCP adapter's `INSTRUCTIONS`. It says what Task Orchard is and that the model makes the judgements; that the guides below are its instructions and the one for a job is to be followed; that the profile below was current when the conversation started; that ids come only from tool results; that times are used as given and never calculated; and that an error's hint says how to correct the call. When the timezone was neither detected nor stored with `set_timezone`, it ends with a warning that asks the model to confirm the zone with the user and save it. That text is `TIMEZONE_WARNING` in `config.py`, so the preamble and the MCP adapter's `INSTRUCTIONS` share it without importing each other.
 2. **The `overview` guide.**
 3. **Every other guide**, in name order, each under a heading `## Guide: <name>` followed by its description and body.
 4. **The profile**: the result of `read_profile()` as JSON, under the heading `## The user's profile`. Its `now` is left out: it would be the session's start time, and the current time already comes with each user message.
@@ -1037,7 +1040,7 @@ The app has two model settings:
 - **Effort is fixed per tier** in `agent/model.py`, not a setting, so the tiers differ even when both name the same model.
 - **The user chooses the tier; code never does.** Choosing from what was asked would be a judgement made in code. A session starts on basic. `chat --strategic` and `ask --strategic` start on strategic, and in `chat`, `/strategic` and `/basic` switch for the turns that follow.
 - **A switch keeps the session.** Nothing already sent changes; the next request simply names the other model and effort. It costs one request that is not served from the cache, which belongs to one model and effort. If the model differs, the API also ignores the earlier reasoning blocks (it drops them, unbilled). Both are acceptable for an occasional, deliberate switch.
-- Scenarios and unattended runs name their tier (below, and section 12). The "meant for" column is a first guess; the scenarios of Phase 5 test it.
+- Scenarios and unattended runs name their tier (below, and section 12). The "meant for" column was a first guess, tested by the scenarios of Phase 5: every skill's scenario passes on Haiku 5.5 at both efforts, and the strategic ones also pass on Sonnet 5.5, which judged a tight time block and the first step of a breakdown better (section 13, "Tiers after Phase 5"). The strategic default stays Haiku 5.5 until the user decides otherwise.
 - Letting the model ask for the strategic tier itself is left to later work on the app (section 13).
 
 #### The model
@@ -1157,7 +1160,7 @@ The tool functions moved out of `mcp/server.py` into the catalogue unchanged, an
 | Test module | Must prove |
 |---|---|
 | `test_tools.py` | The catalogue has one tool for every operation built so far, named as its `Orchard` method, in the order of section 8. Every schema is an object whose parameters each have a description; enumerated parameters list their names and still accept `"Must"`; `read_only` is set for exactly the read operations. `call_tool` returns the same dict as the `Orchard` method on success; turns an `OrchardError` into the JSON of section 4.2 with `is_error`; and answers an unknown tool, a missing required argument, a wrong type and an unknown parameter with `invalid` and a hint, having written nothing. |
-| `test_agent_prompt.py` | The four parts in order, the overview first and every other guide present under its heading. The profile block holds the charter and notes as they were when the session started. The block before it is identical for two sessions with different profiles. The timezone warning appears only when the zone was not detected. Every user message starts with the `[Now: …]` line, built from the clock. |
+| `test_agent_prompt.py` | The four parts in order, the overview first and every other guide present under its heading. The profile block holds the charter and notes as they were when the session started. The block before it is identical for two sessions with different profiles. The timezone warning appears only when the zone was neither detected nor stored. Every user message starts with the `[Now: …]` line, built from the clock. |
 | `test_agent_loop.py` | With `ScriptedModel`: a reply with no tool call ends the turn with its text. A tool call changes the database and its result goes back. Two calls in one reply run in order and their results go back in one message. An `OrchardError` goes back as a failed result and the loop continues, so a scripted retry succeeds. The step limit, `max_tokens` and `refusal` each end the turn with the stated text. A reply cut off with a tool call in it gets a `not_run` result for that call, nothing runs, and in the next request every tool call is followed by its result. Over several turns, the system prompt, the tool list and every earlier message of each request equal those of the request before it. A reply's content is passed back unchanged, including a block the loop does not know. A model that raises leaves the conversation as it was, including tool results already appended. |
 | `test_chat_cli.py` | With a scripted model injected: `ask` prints the answer and exits 0, and exits 1 when the model cannot be reached. `chat` answers on stdout and reports tool calls on stderr; `/new` starts a session that reads the profile again; `/quit` and end of input exit; `--transcript` writes one JSON line per message and tool outcome; the long-session notice appears once. A session starts on the basic tier's model; `--strategic`, `/strategic` and `/basic` select the other tier's model and effort, and a switch keeps every earlier message. Missing credentials give the stated message and exit 1 before any input is read. |
 | `test_mcp_adapter.py` | Through the in-memory client: the server lists exactly the catalogue's tools plus `get_guide`, with the catalogue's descriptions; one read, one write and one error round-trip. |
@@ -1193,7 +1196,7 @@ Build: `core/recurrence.py`, the `recurrence` object in `create_task` and `updat
 
 The seed's recurring history stays hand-built, because replaying four weeks through `roll_forward` would mean running the seed against a moving clock; `test_seed_roll.py` checks that its rows and events are what `roll_forward` would have written, and that a request on the seed writes nothing. `tests/scenarios/test_recurring.py` checks setting up a monthly scheduled task and recording a run against the flexible task.
 
-### Phase 5 — Learning and review
+### Phase 5 — Learning and review (done)
 
 Build: full pattern digests, the balance, `get_review_queue`, `get_recent_activity`, `merge_tasks`, the `settings` table and `set_timezone`. Skills: `onboarding`, `plan-time-block`, `housekeeping`, `weekly-review`. Complete the skill scenarios.
 
@@ -1204,11 +1207,13 @@ Build: full pattern digests, the balance, `get_review_queue`, `get_recent_activi
 | `test_review_queue.py` | Each section's membership, order and limit. Against the seed: `dentist` leads `most_deferred` and is in `repeat_starts`; `milk` is in `overdue`; the weekly summary is in `missed`. A recurring task and its instances are never reported as duplicates. Items are slim rows. |
 | `test_merge.py` | Children, links, fields, `pattern_id`, notes; refusal cases; cycle check. |
 | `test_settings.py` | `set_timezone` stores the zone and the next call uses it; an unknown name is `invalid`; `TASK_ORCHARD_TZ` still wins. |
-| `test_response_size.py` | With 500 generated tasks, every read tool's response stays under 20,000 characters. |
+| `test_response_size.py` | With 500 generated tasks, every read tool's response stays under 20,000 characters. A list of worst-case rows stays under 30,000 (section 13, "Worst-case rows"). |
 
 **Skill scenarios.** The harness and the first scenarios exist from Phase 2A, and each phase since has added one per skill (section 10.2). By the end of this phase every skill has at least one. Run the whole set on the defaults (both tiers on Haiku 5.5), then with the strategic tier on a larger model, and report to the user which skills the small model handles well enough. That answers which tier each skill belongs in, and whether the strategic default should change.
 
 Also revisit, with the user, whether to log suggestions that were offered and not chosen. This would be a signal of its own, closer to "avoided" than "engaged", and is deliberately not a touch (section 5.6). The server cannot see what an agent showed the user. The app can: its loop holds the shortlist the model was given and the answer it wrote, so it could record the offer itself, at no cost in tool calls. An outside assistant would still have to report it. Decide whether the signal is worth having when only the app supplies it.
+
+**As built.** The tests above pass, and `test_mcp_phase2.py` checks that every guide ships and stays within its length. The scenarios are in `tests/scenarios/test_phase_5.py` (onboarding, plan-time-block, housekeeping, weekly review, and triage, which had none). All eleven pass on the defaults; the strategic four were also run on Sonnet 5.5 (section 13, "Tiers after Phase 5"). Logging offered suggestions has not been built: it is waiting for the user's decision.
 
 ### Phase 6
 
@@ -1304,3 +1309,20 @@ Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PL
 | Reopening a flexible instance | Does not undo the snooze its completion set on R; the response carries a `note` saying R is asleep and how to wake it. Undoing it would need the snooze from before the completion, which nothing stores. |
 | Waking a scheduled task that is not paused | `snooze_task(days=0)` on a scheduled task with no snooze writes nothing, as for any task. |
 | Scenario hint | Rejecting `deadline`, `firmness` or `achievable` on a recurring task now says to call again without them and where firmness goes. Haiku sent all three for "pay the rent on the 1st" and took three calls to recover from the earlier hint. |
+| Settings table | One row (`id = 1`, enforced by a CHECK), holding only the timezone for now. A stored zone also silences the preamble's timezone warning, since onboarding has confirmed it. |
+| `set_timezone` result | `now` is shown in the zone just saved, so the model can read the change back to the user. When `TASK_ORCHARD_TZ` overrides the stored zone, the call still saves it and adds a `note`, rather than failing, so the setting is right once the environment variable goes. |
+| Balance keys | `last_7_days` and `last_30_days`: the window in the key, so the model never has to be told what `week` means. |
+| Digest numbers | One decimal place, and whole numbers without one. Fewer characters, and `45` reads as minutes where `45.0` reads as a measurement. |
+| Duplicates as pairs | Every pair, ordered by id, so a title held by three tasks is three pairs and the agent can merge them one at a time. |
+| Missed counts | `missed.done` counts completions in the same 30 days as `missed`, so the two can be compared. |
+| Untouched | Recurring tasks are left out: they are containers and are never touched themselves, so they would fill the section. Their instances count as ordinary tasks. |
+| Closed in activity | `dropped` and `missed` are read from status plus the closing event in the window, so a reopened task is not reported as dropped. A merge is reported as dropped with `reason: merged into #N`, since it is how the user lost a task from the list. |
+| `get_recent_activity` default | One day (the last 24 hours), as 8.16 states, for the evening run of Phase 6. The guides that want a week pass `days: 7`. The first build defaulted to 7 against the spec and was put back. |
+| Merge notes | Cut to fit the 20,000-character notes limit with a marker pointing at the source, rather than refusing the merge: a merge is for duplicates, and the source stays readable. |
+| Merge events | The source is logged as `merged` only, not also `dropped`, so each event means one thing and the activity report shows "merged into" in its place. |
+| Input limits | Found by `test_response_size.py`: conditions at most 5 tags of 30 characters, a pattern's `description` at most 600 characters, and the pattern name in a row cut to 40. Without them a single row could pass 2,000 characters. |
+| Worst-case rows | With every key at its limit (an 80-character title, five long conditions, a 40-character pattern name, a 120-character hint, three blockers) a row is about 870 characters, so a list of 30 such rows passes 20,000. Real rows are far shorter; realistic data stays under 20,000 for every read tool, and the worst case is held under 30,000 by a test. Lowering the list maximum or trimming rows is a question for the user. |
+| Housekeeping and dates | Housekeeping clears a stale soft deadline the user did not set, and never picks a new date. The first draft of section 9 allowed re-dating; but housekeeping runs with nobody there to answer (Phase 6), and a date the user did not choose is a guess that looks like a commitment. |
+| Onboarding trigger | `overview` offers onboarding when the profile has no charter. The trigger lives in the guide, not in code, since the app judges nothing in code. |
+| Overview length | `overview` may be 800 words: it lists every guide and says when to use each, and the list grows with every phase. The others keep the 600-word limit, checked by a test. |
+| Tiers after Phase 5 | Every scenario passes on Haiku 5.5. On the strategic scenarios Sonnet 5.5 was better at two things: planning a block too short for its deadlines (it committed to the plan that met both, where Haiku also offered one that missed a deadline), and making the first step of a breakdown small. Haiku also invented a condition tag during a breakdown. The default is unchanged until the user decides. |

@@ -470,7 +470,7 @@ def catalogue(orchard: Orchard) -> list[Tool]:
 
     @_read_only
     def get_recent_activity(
-        days: Annotated[int, _p("1 to 31, e.g. 7.")] = 7,
+        days: Annotated[int, _p("1 to 31: the last 24 hours, or 7 for the week.")] = 1,
     ) -> dict[str, Any]:
         """What happened lately: completed, dropped and missed work, counts,
         and the want / should / must balance over 7 and 30 days."""
