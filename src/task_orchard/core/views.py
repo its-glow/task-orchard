@@ -105,7 +105,8 @@ def wire_value(field: str, task: Task, tz: ZoneInfo) -> Any:
 # --- The row (4.3) ---
 
 
-def _path(snap: Snapshot, task: Task) -> list[str]:
+def path(snap: Snapshot, task: Task) -> list[str]:
+    """Ancestor titles, root first, cut to PATH_DEPTH (SPEC 4.3)."""
     above = snap.ancestors(task)
     names = [truncate(t.title, NESTED_TITLE_CHARS) for t in reversed(above[:PATH_DEPTH])]
     if len(above) > PATH_DEPTH:
@@ -148,7 +149,7 @@ def task_row(
         row["status"] = task.status.value
     if snap.is_instance(task):
         row["instance_of"] = task.parent_id
-    row["path"] = _path(snap, task)
+    row["path"] = path(snap, task)
 
     priority = snap.effective_priority(task)
     if priority is not None:
@@ -232,12 +233,19 @@ def recurring_block(snap: Snapshot, task: Task, tz: ZoneInfo) -> dict[str, Any]:
 # --- Pattern digests (6.1) ---
 
 
-def pattern_digests(session: Any, patterns: list[Pattern]) -> list[dict[str, Any]]:
-    return [compact(d, keep=("id", "name")) for d in history.pattern_digests(session, patterns)]
+def pattern_digests(
+    session: Any, patterns: list[Pattern], tz: ZoneInfo, now: datetime
+) -> list[dict[str, Any]]:
+    out = []
+    for digest in history.pattern_digests(session, patterns):
+        last = digest["last_done"]
+        digest["last_done"] = None if last is None else timefmt.stamp(last, tz, now)
+        out.append(compact(digest, keep=("id", "name")))
+    return out
 
 
-def pattern_digest(session: Any, pattern: Pattern) -> dict[str, Any]:
-    return pattern_digests(session, [pattern])[0]
+def pattern_digest(session: Any, pattern: Pattern, tz: ZoneInfo, now: datetime) -> dict[str, Any]:
+    return pattern_digests(session, [pattern], tz, now)[0]
 
 
 # --- The detail (4.4) ---
@@ -374,6 +382,6 @@ def task_detail(snap: Snapshot, task: Task, tz: ZoneInfo) -> dict[str, Any]:
     if task.closed_at is not None:
         extra["closed"] = timefmt.stamp(task.closed_at, tz, now)
     if task.pattern_id is not None:
-        extra["pattern"] = pattern_digest(snap.session, snap.pattern(task.pattern_id))
+        extra["pattern"] = pattern_digest(snap.session, snap.pattern(task.pattern_id), tz, snap.now)
 
     return compact({**detail, **extra}, keep=("id", "title"))

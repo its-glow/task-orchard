@@ -43,7 +43,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from task_orchard.config import Settings
-from task_orchard.core import graph, history, shortlist, views, wire
+from task_orchard.core import graph, history, review, shortlist, views, wire
 from task_orchard.core import recurrence as recur
 from task_orchard.core.clock import Clock, SystemClock
 from task_orchard.core.derive import Snapshot
@@ -598,7 +598,7 @@ class Orchard:
         with self.tx() as tx:
             s = tx.session
             existing = [
-                (t.id, t.title, _normalise_title(t.title))
+                (t.id, t.title, review.normalise_title(t.title))
                 for t in s.scalars(
                     sa.select(Task).where(Task.status == Status.OPEN).order_by(Task.id)
                 )
@@ -626,7 +626,7 @@ class Orchard:
                 s.add(task)
                 s.flush()
                 record(s, EventType.CREATED, at=tx.now, task_id=task.id, payload={"via": "capture"})
-                key = _normalise_title(title)
+                key = review.normalise_title(title)
                 matches = [(i, t) for i, t, k in existing if k == key][:DUPLICATES_PER_ITEM]
                 for other_id, other_title in matches:
                     duplicates.append(
@@ -1863,6 +1863,20 @@ class Orchard:
             payload = shortlist.critical(snap, tx.tz, horizon=timedelta(days=days))
             return self._respond(tx, payload, keep=["critical", "inbox"])
 
+    # --- get_review_queue (8.15), get_recent_activity (8.16) ---
+
+    def get_review_queue(self) -> dict[str, Any]:
+        with self.tx() as tx:
+            snap = Snapshot(tx.session, tx.now)
+            queue = review.review_queue(snap, tx.tz)
+            return self._respond(tx, queue, keep=list(queue))
+
+    def get_recent_activity(self, days: int = review.ACTIVITY_DEFAULT_DAYS) -> dict[str, Any]:
+        days = _int_in_range(days, "days", 1, review.ACTIVITY_DAYS_MAX)
+        with self.tx() as tx:
+            activity = review.recent_activity(tx.session, tx.now, days)
+            return self._respond(tx, activity, keep=["balance"])
+
     # --- find_patterns, save_pattern (8.17) ---
 
     def find_patterns(self, query: str | None = None, limit: int = 5) -> dict[str, Any]:
@@ -1881,7 +1895,9 @@ class Orchard:
                     reverse=True,
                 )[:limit]
             return self._respond(
-                tx, {"patterns": views.pattern_digests(s, patterns)}, keep=["patterns"]
+                tx,
+                {"patterns": views.pattern_digests(s, patterns, tx.tz, tx.now)},
+                keep=["patterns"],
             )
 
     def save_pattern(
@@ -1958,7 +1974,7 @@ class Orchard:
                     payload = {"pattern_id": pattern.id, "created": True, "changes": changes}
                 record(s, EventType.PATTERN_SAVED, at=tx.now, payload=payload)
             s.flush()
-            return self._respond(tx, {"pattern": views.pattern_digest(s, pattern)})
+            return self._respond(tx, {"pattern": views.pattern_digest(s, pattern, tx.tz, tx.now)})
 
     @staticmethod
     def _merge_patterns(tx: Tx, into: Pattern, source: Pattern) -> None:
@@ -2153,14 +2169,6 @@ def _reject_recurring_blocker(task: Task) -> None:
             hint="Use one of its instances as the blocker instead.",
             task_id=task.id,
         )
-
-
-_TITLE_PUNCTUATION = re.compile(r"^[\W_]+|[\W_]+$")
-
-
-def _normalise_title(title: str) -> str:
-    """For duplicate detection: case, spacing and surrounding punctuation ignored."""
-    return _TITLE_PUNCTUATION.sub("", " ".join(title.casefold().split()))
 
 
 # Letters and digits only: the tokenizer treats "_" as a separator, so a query
