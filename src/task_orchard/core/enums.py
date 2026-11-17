@@ -102,6 +102,25 @@ TRACKED_FIELDS: tuple[str, ...] = (
     "achievable",
 )
 
+# Fields a call writes that carry no source. A `sources` entry naming one is
+# ignored rather than refused: marking the user's own recurrence or title as
+# "user" is right in spirit, and refusing it only costs the model a call.
+UNTRACKED_FIELDS: tuple[str, ...] = (
+    "title",
+    "description",
+    "notes",
+    "append_note",
+    "parent_id",
+    "snooze_until",
+    "pattern_id",
+    "blocked_by",
+    "blocks",
+    "recurrence",
+    "cadence",
+    "gap_days",
+    "triaged",
+)
+
 
 class EventType(StrEnum):
     # Changes made through a service call.

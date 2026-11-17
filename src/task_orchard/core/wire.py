@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Any
 
-from task_orchard.core.enums import TRACKED_FIELDS, FieldSource
+from task_orchard.core.enums import TRACKED_FIELDS, UNTRACKED_FIELDS, FieldSource
 from task_orchard.core.errors import Invalid
 
 TITLE_MAX_CHARS = 500
@@ -126,8 +126,9 @@ def ids(value: Any, param: str) -> list[int]:
 def sources(value: Any) -> dict[str, FieldSource]:
     """The `sources` object of SPEC 4.5. `firmness` is accepted as `deadline`.
 
-    An entry for a field the call does not write is ignored; an entry for a
-    field that is not tracked is invalid, since it is almost always a typo.
+    An entry for a field the call does not write, or for a real field that
+    carries no source (`recurrence`, `title`), is ignored. Any other name is
+    invalid, since it is almost always a typo.
     """
     if value is None:
         return {}
@@ -139,6 +140,8 @@ def sources(value: Any) -> dict[str, FieldSource]:
         name = _key(str(field))
         if name in ("firmness", "deadline_firmness"):
             name = "deadline"
+        if name in UNTRACKED_FIELDS:
+            continue
         if name not in TRACKED_FIELDS:
             raise Invalid(
                 f"sources names {field!r}, which is not a tracked field.",
