@@ -8,15 +8,13 @@ does and still pipe the answers.
 from __future__ import annotations
 
 import atexit
-import json
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
 from task_orchard.agent import commands
-from task_orchard.agent.commands import tool_line
-from task_orchard.agent.loop import SESSION_TOKEN_LIMIT, Event, Session, run_turn, start_session
+from task_orchard.agent.loop import SESSION_TOKEN_LIMIT, Session, run_turn, start_session
 from task_orchard.agent.model import (
     BASIC,
     EFFORT,
@@ -26,6 +24,7 @@ from task_orchard.agent.model import (
     ModelUnavailable,
     has_credentials,
 )
+from task_orchard.agent.trace import Trace
 from task_orchard.config import Settings
 from task_orchard.core.clock import Clock
 from task_orchard.core.service import Orchard
@@ -36,7 +35,6 @@ CREDENTIALS_HELP = (
     "Model calls are billed to that account."
 )
 COMMANDS_HELP = "/help lists the commands; /exit leaves."
-EXIT_COMMANDS = ("/exit", "/quit")
 HISTORY_LINES = 1000
 LONG_SESSION = (
     "This conversation is getting long. /new starts a fresh one; your tasks and profile are kept."
@@ -48,41 +46,6 @@ def models_for(settings: Settings) -> dict[str, Model]:
         BASIC: AnthropicModel(settings.model_basic, EFFORT[BASIC]),
         STRATEGIC: AnthropicModel(settings.model_strategic, EFFORT[STRATEGIC]),
     }
-
-
-def _model_name(model: Model) -> str:
-    return str(getattr(model, "model_id", type(model).__name__))
-
-
-class _Trace:
-    """Reports tool calls on stderr and writes the transcript, if there is one.
-
-    It also keeps what the tester commands show: the tool calls of the latest
-    turn (/last) and the usage of every request in this session (/usage).
-    """
-
-    def __init__(self, stderr: TextIO, transcript: TextIO | None) -> None:
-        self.stderr = stderr
-        self.transcript = transcript
-        self.session_number = 0
-        self.turn_tools: list[Event] = []
-        self.requests: list[Event] = []
-
-    def new_session(self) -> None:
-        self.session_number += 1
-        self.turn_tools = []
-        self.requests = []
-
-    def __call__(self, event: Event) -> None:
-        if event["type"] == "tool":
-            print(tool_line(event), file=self.stderr, flush=True)
-            self.turn_tools.append(event)
-        elif event["type"] == "usage":
-            self.requests.append(event)
-        if self.transcript is not None:
-            record = {"session": self.session_number, **event}
-            self.transcript.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self.transcript.flush()
 
 
 def _line_reader(
@@ -127,10 +90,6 @@ def _line_reader(
     return read_plain
 
 
-def _announce(session: Session, stderr: TextIO) -> None:
-    print(f"[{session.tier}: {_model_name(session.model)}]", file=stderr, flush=True)
-
-
 def chat(
     orchard: Orchard,
     clock: Clock,
@@ -149,81 +108,84 @@ def chat(
     if transcript is not None:
         transcript.parent.mkdir(parents=True, exist_ok=True)
         log = transcript.open("a", encoding="utf-8")
-    trace = _Trace(stderr, log)
-
-    def new_session(tier: str) -> Session:
-        trace.new_session()
-        session = start_session(
-            orchard, clock, models, tier=tier, timezone_detected=timezone_detected, on_event=trace
-        )
-        _announce(session, stderr)
-        return session
-
+    trace = Trace(log, tool_lines=stderr)
+    host = _ChatHost(orchard, clock, models, trace, timezone_detected)
     try:
         print(f"Task Orchard. {COMMANDS_HELP}", file=stderr, flush=True)
         if transcript is not None:
             print(f"Transcript: {transcript}", file=stderr, flush=True)
-        session = new_session(STRATEGIC if strategic else BASIC)
-        warned = False
+        host.new_session(STRATEGIC if strategic else BASIC)
+        commands.announce(host.session, stderr)
         read_line = _line_reader(stdin, stdout, stderr, history)
-        while True:
+        while not host.leaving:
             line = read_line()
             if not line:
                 break
             text = line.strip()
             if not text:
                 continue
-            if text in EXIT_COMMANDS:
-                break
-            if text == "/new":
-                session = new_session(BASIC)
-                warned = False
-                continue
-            if text in ("/strategic", "/basic"):
-                session.switch(text[1:])
-                _announce(session, stderr)
-                continue
-            if text == "/help":
-                print(commands.HELP, file=stderr, flush=True)
-                continue
             if text.startswith("/"):
-                name, _, arg = text.partition(" ")
-                if not _tester_command(name, arg, session, trace, stdout, stderr):
+                name, _, rest = text.partition(" ")
+                command = commands.find(name)
+                if command is None:
                     print(f"Unknown command. {COMMANDS_HELP}", file=stderr, flush=True)
+                else:
+                    command.run(host, commands.parse_args(command, rest), stdout, stderr)
                 continue
-            trace.turn_tools = []
+            trace.new_turn()
+            session = host.session
             try:
                 answer = run_turn(session, text)
             except ModelUnavailable as err:
                 print(f"Could not reach the model: {err}", file=stderr, flush=True)
                 continue
             print(answer, file=stdout, flush=True)
-            if session.input_tokens > SESSION_TOKEN_LIMIT and not warned:
+            if session.input_tokens > SESSION_TOKEN_LIMIT and not host.warned:
                 print(LONG_SESSION, file=stderr, flush=True)
-                warned = True
+                host.warned = True
         return 0
     finally:
         if log is not None:
             log.close()
 
 
-def _tester_command(
-    name: str, arg: str, session: Session, trace: _Trace, out: TextIO, err: TextIO
-) -> bool:
-    """Run a tester command (SPEC 10.2). False if `name` is not one."""
-    if name == "/tools":
-        commands.tools(session, out)
-    elif name == "/tool":
-        commands.tool(session, arg, out, err)
-    elif name == "/last":
-        commands.last(trace.turn_tools, out, err)
-    elif name == "/prompt":
-        commands.prompt(session, out)
-    elif name == "/usage":
-        commands.usage(trace.requests, out, err)
-    else:
-        return False
-    return True
+class _ChatHost:
+    """chat's side of the command registry (commands.Host)."""
+
+    terminal = True
+
+    def __init__(
+        self,
+        orchard: Orchard,
+        clock: Clock,
+        models: Mapping[str, Model],
+        trace: Trace,
+        timezone_detected: bool,
+    ) -> None:
+        self.orchard = orchard
+        self.clock = clock
+        self.models = models
+        self.trace = trace
+        self.timezone_detected = timezone_detected
+        self.session: Session
+        self.leaving = False
+        # The long-session notice has been shown in this session.
+        self.warned = False
+
+    def new_session(self, tier: str) -> None:
+        self.trace.new_session()
+        self.session = start_session(
+            self.orchard,
+            self.clock,
+            self.models,
+            tier=tier,
+            timezone_detected=self.timezone_detected,
+            on_event=self.trace,
+        )
+        self.warned = False
+
+    def leave(self) -> None:
+        self.leaving = True
 
 
 def ask(
@@ -238,7 +200,7 @@ def ask(
     stderr: TextIO = sys.stderr,
 ) -> int:
     """One turn in a new session. Exit 0 with the answer, 1 if the model could not be reached."""
-    trace = _Trace(stderr, None)
+    trace = Trace(None, tool_lines=stderr)
     session = start_session(
         orchard,
         clock,

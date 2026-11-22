@@ -964,7 +964,7 @@ the app (agent/)        MCP adapter (mcp/)       REST (api/, Phase 6)
 
 ### 10.2 The app — Phase 2A
 
-`src/task_orchard/agent/`. It imports `core`, `tools`, `guides` and `config`. Only `cli` imports it.
+`src/task_orchard/agent/`. It imports `core`, `tools`, `guides` and `config`. Only `cli` and the Discord bot (section 10.5) import it.
 
 The app is a loop around a model. It holds no task logic and makes no judgement in code: it builds the prompt, sends the conversation, runs the tools the model asks for, and repeats.
 
@@ -1113,6 +1113,64 @@ A scenario checks that a real model, given the app's prompt and tools, does the 
   - `--sources` adds `<field>_source` for each tracked field (section 4.5), empty where the field has no value;
   - `--open` keeps open tasks only.
   Times are local, as `YYYY-MM-DDTHH:MM`. Booleans are `yes` and `no`. Description and notes are left out, and a line break in a title becomes a space, so each task stays on one line. Like every read, it rolls recurrences forward first.
+
+### 10.5 The Discord bot
+
+`task-orchard discord` runs the app of section 10.2 as a Discord bot, for one person talking to it in direct messages. It is for testing and personal use until a larger app or agent platform takes over the conversation (section 12). It is another front end like `chat`: it adds no task logic, and the one judgement it needs, whether a conversation is still going, is made by a model.
+
+#### Setting it up
+
+| Setting | Content |
+|---|---|
+| `TASK_ORCHARD_DISCORD_TOKEN` | The bot's token, from the Discord developer portal. Read from the environment, never printed or logged. |
+| `TASK_ORCHARD_DISCORD_USER_ID` | The one Discord user the bot answers. |
+| `TASK_ORCHARD_DISCORD_IDLE_MINUTES` | How long a conversation may sit idle before the next message is checked (below). Default 30. |
+
+- Without a token or a user id it prints what is missing to stderr and exits 1. Without credentials for the Claude API it fails as `chat` does. Both checks come before Discord is contacted.
+- **One person.** Messages and commands from anyone else are ignored; a command from someone else is answered, privately, that the bot has one user. The bot's own messages are ignored.
+- **Direct messages only.** Messages in a server channel are ignored, so the bot needs no privileged intent. Its slash commands are offered in DMs and in servers alike, since Discord lets a DM open only with a bot that shares a server with the user.
+- Like `chat`, it opens the database directly. One worker thread does all the work of the bot: it opens the `Orchard` and runs every turn, command and check, one at a time. Nothing reaches SQLite from another thread, and a command sent during a turn waits for it.
+
+#### Conversations
+
+Each message is a turn, as a line is in `chat`. Which session it goes to:
+
+1. No session yet (the bot has just started, or `/new` was used): a new one.
+2. A Discord reply to one of the bot's messages in the current session: that session.
+3. The current session was last active less than the idle limit ago: that session.
+4. Otherwise the **continuity check** decides between the current session and a new one.
+
+The rule is that a conversation ends when it goes idle, unless it was left on an open question that the new message takes up. The check is made when the next message arrives rather than by a timer when the idle limit passes: it then has the reply in hand, nothing runs for a conversation that is never resumed, and there is nothing to schedule.
+
+- **The check is one request to the basic tier's model**, separate from every session and outside the append-only rule, since it belongs to no session. It sends no tools. Its system prompt is `agent/continuity.md`, which is not a guide and never reaches a session's prompt. Its one user message holds the assistant's last answer in the session, how long ago it was given (in hours and minutes), and the new message. The reply's first word, `continue` or `new`, is the decision; anything else counts as `new`.
+- When a new session starts in this way, the answer to the message ends with a line in Discord's small text: `-# New conversation.`
+- A session lives only in memory. Restarting the bot starts afresh.
+- The decision, with the request's usage, goes to the transcript as a `continuity` event. A failed check is reported like a failed turn, and the message is not answered.
+- A long session is ended as in `chat`: past `SESSION_TOKEN_LIMIT`, the answer once ends with a note that `/new` starts a fresh one.
+
+#### Answers
+
+- While a turn runs, the bot shows that it is typing.
+- An answer longer than Discord's 2,000 characters is sent as several messages, split at a paragraph break where there is one in reach, then at a line break, then anywhere.
+- Tool calls are not shown. The transcript has them, and `/last` shows the latest turn's.
+- A model that cannot be reached is reported in the same words as in `chat`.
+
+#### Commands
+
+The commands of `chat` (section 10.2) are defined once, in a registry in `agent/commands.py`: each entry has a name, a one-line summary, its parameters (each a name, a description and whether it is required), whether it belongs to the terminal only, and a handler that writes what it shows to one stream and complaints to another. `chat` dispatches through the registry, and `/help` is built from it. The bot registers every entry that is not terminal-only as a Discord slash command, with the same parameters, when it starts. A command added to the registry therefore appears in both with no other change.
+
+- In `chat`, a command's parameters are read from the rest of the line: each but the last up to the next space, the last to the end of the line. `/tool get_task {"task_id": 12}` gives `name` and `arguments` as before.
+- Terminal-only: `/exit` and `/quit`.
+- In Discord, the bot acknowledges each command at once, since Discord drops one not acknowledged within three seconds, then sends its output: inside a code block when it fits in one message, otherwise as a text file attached under the command's name. A command that shows nothing is answered `Done.`
+- `/tool`'s `name` offers the catalogue's read-only tools as completions.
+
+#### Transcripts
+
+As in `chat`: every message, tool outcome, request's usage and continuity check, as JSON lines tagged with the session's number, in a new file `$XDG_CACHE_HOME/task-orchard/transcripts/discord-<UTC time>.jsonl` for each run of the bot. `--transcript PATH` and `--no-transcript` work as in `chat`. The path is printed to stderr at the start.
+
+#### Tests
+
+`test_commands.py` and `test_discord.py`, with `ScriptedModel` and no network: chat's behaviour is unchanged by the registry, and `/help` lists every entry; a command added to the registry appears in `chat` and, built offline into a Discord command tree, in the bot with its parameters, while a terminal-only one does not; each of the four routing rules above, the check's request, every reading of its reply, and its transcript event; splitting a long answer; the owner check; and the missing-setting messages.
 
 ## 11. Phases and acceptance
 
@@ -1353,6 +1411,7 @@ Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PL
 | Tester commands | Asked for by the user, to check the model's work rather than ask it: `/tools`, `/tool` (read-only by the user's choice: edits are made with an outside tool), `/last`, `/prompt` and `/usage`, with each request's usage also in the transcript. `/help` lists everything. |
 | `dump` | A CLI command only, by the user's choice, not a chat command. It carries derived columns because those are what the model reasons from, and leaves out description and notes so each task is one greppable line. |
 | `--help` everywhere | The user asked that every command, at least `dump` and `chat`, list its options with `--help`. argparse gives this; a test holds every command to it. |
+| Discord bot | Asked for by the user, for testing and personal use before a larger app takes over the conversation: DMs, one user, `chat`'s commands as slash commands from one registry, and transcripts as in `chat`. The user's rule is that a conversation closes after inactivity unless it was left on an open question. It is checked when the next message arrives, with that message in hand, rather than by a timer: an open question from days ago should not capture an unrelated "what now?", and nothing need run for a conversation never resumed. A Discord reply to the bot always continues, as an explicit override. Built before Phase 6 as a standalone process, by the user's choice. |
 
 ## 14. Future work
 

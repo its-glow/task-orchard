@@ -10,9 +10,10 @@ import pytest
 
 from task_orchard import cli
 from task_orchard.agent import chat as chat_module
-from task_orchard.agent.chat import CREDENTIALS_HELP, LONG_SESSION, ask, chat, tool_line
+from task_orchard.agent.chat import CREDENTIALS_HELP, LONG_SESSION, ask, chat
 from task_orchard.agent.loop import SESSION_TOKEN_LIMIT
 from task_orchard.agent.model import BASIC, STRATEGIC, ModelUnavailable, Reply, Usage, cost
+from task_orchard.agent.trace import tool_line
 from task_orchard.core.clock import FixedClock
 from task_orchard.core.service import Orchard
 from tests.scripted import ScriptedModel, calls, text
