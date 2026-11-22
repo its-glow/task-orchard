@@ -31,12 +31,70 @@ Requires Python 3.12 or later and [`uv`](https://docs.astral.sh/uv/). The assist
 
 ```
 uv sync
-uv run pytest                 # about 45 seconds; never calls a model
+uv run pytest                 # about two minutes; never calls a model
 TASK_ORCHARD_DB=/tmp/orchard-demo.db uv run task-orchard seed-demo
 TASK_ORCHARD_DB=/tmp/orchard-demo.db uv run task-orchard chat
 ```
 
 Leave out `TASK_ORCHARD_DB` to use your real database at the default path.
+
+## Using it day to day
+
+You run Task Orchard by talking to it: start `task-orchard chat` and say what you want in plain words. There is no fixed syntax. The phrases below are only examples of the kind of thing to say.
+
+### The first time
+
+Say **"Get me set up."** The assistant asks what you want from Task Orchard (it saves this as your *charter*, which it checks your weeks against), confirms your timezone, and invites you to empty your head of everything you're carrying. It sorts that list for you, sets up anything that repeats, and notes a few things about how you work. Allow ten to fifteen minutes.
+
+### A rhythm that works
+
+| When | Say something like | What happens |
+|---|---|---|
+| **Any time something comes up** | "Add: call the dentist, renew passport, buy milk" | It goes straight into your inbox, with no questions asked. Getting it out of your head is the point. |
+| **Once a day, or when the inbox grows** | "Triage my inbox" | The assistant fills in each new task (how urgent, how big, how hard to start), guessing rather than quizzing you, and tells you what it assumed. Correct anything it got wrong. |
+| **Morning** | "What's on today? Is anything urgent?" or "I've got the morning, plan it" | A short list of what matters today, or an ordered plan with times that fits the hours you have. |
+| **When you have a gap** | "What should I do now? I've got 30 minutes and not much energy" | One to five options that fit, each with a reason. Mentioning your time, energy and where you are makes the suggestions better. |
+| **When something feels too big** | "Break down the garage clear-out" | The next layer of small, concrete steps. Only one layer at a time: vague steps can be broken down later. |
+| **As you work** | "Starting the tax return." "Done with it. Took two hours, easier than I feared." | Starting and finishing are recorded. How long it took and how it felt make later estimates and suggestions better. |
+| **When plans change** | "Not today, push the dentist to Friday." "Drop the bike repair, I sold it." | Snoozed until then, or closed with your reason. Nothing is ever deleted, and anything can be reopened. |
+| **Evening** | "What did I get done today?" and mention anything you finished without saying so | A look back at the day, and a chance to record finished work and how it went. |
+| **Once a week** | "Let's do my weekly review" | See below. |
+| **Every week or two** | "Do some housekeeping" | See below. |
+
+The morning and evening routines will run on their own, on a schedule, once [phase 6](docs/SPEC.md) is built. Until then, start them yourself as above.
+
+### The weekly review
+
+Set aside fifteen minutes and say **"Let's do my weekly review."** Typing `/strategic` first gives the assistant more room to think. It:
+
+1. looks back over the week: what you finished, anything dropped or missed, and how your time split between what you *want* to do, *should* do and *must* do, compared with your charter;
+2. picks up to six things that keep getting put off, restarted or left untouched, and for each one asks you to **drop** it, **reshape** it (break it down, or find a smaller first step) or **recommit** to it with a real date. You can answer for all of them in one message;
+3. asks about any repeating task you keep missing, whether its schedule still fits;
+4. asks whether parents with nothing left under them are finished;
+5. if your week was far from your charter, asks whether the plan or the charter should change.
+
+It decides nothing on its own: every drop or change in a review is your call.
+
+### Housekeeping
+
+Say **"Do some housekeeping"** whenever the list feels cluttered. On its own, without asking, it:
+
+- merges tasks that are exact duplicates;
+- clears soft deadlines it had guessed that are now weeks past and no longer mean anything;
+- tidies overlapping notes about you.
+
+It never drops or completes anything, and never changes a value you set yourself. Everything that needs your judgement comes back as a short list: finished-looking projects, overdue work, things you keep avoiding, repeating tasks you keep missing. Answer as many as you like.
+
+### Things that repeat
+
+Just describe them: "Pay rent on the 1st of every month", "Weekly report every Friday by 5", "Water the plants about every five days". Fixed schedules turn up on time whether or not you did the last one. Loose ones ("about every five days") come back that long after you last did them.
+
+### Tips
+
+- **Tell it about yourself.** "I'm useless after 4pm" or "Calls are hard for me, so keep them small" is saved to your profile and used from then on.
+- **What you state is kept.** A value you set yourself (a deadline, a priority) is never overwritten by the assistant's guesses. If it can't make a change because of that, it says so.
+- **Start fresh often.** Each `chat`, or `/new`, starts a clean conversation. Nothing is lost, because your tasks and profile live in the database. One conversation per sitting or per job keeps it quick and cheap.
+- **Two levels of thinking.** `/basic` (the default) suits capturing, triage and quick questions. `/strategic` suits planning, breaking down big work and the weekly review.
 
 ## Configuration
 
