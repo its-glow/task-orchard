@@ -61,7 +61,12 @@ src/task_orchard/
     prompt.py          builds the system prompt: preamble, guides, profile; the [Now:] line
     loop.py            Session, start_session, run_turn: the tool-use loop; MAX_STEPS
     chat.py            task-orchard chat and ask
-    commands.py        chat's tester commands: /tools, /tool, /last, /prompt, /usage
+    commands.py        the command registry, shared by chat and Discord: /new, /tools, /usage...
+    trace.py           Trace: transcripts, /last and /usage figures
+    continuity.py      Conversation: which session a Discord message goes to; continuity.md
+  discord_bot/       task-orchard discord (SPEC 10.5)
+    app.py             BotApp: what the bot does, with no Discord in it
+    client.py          the only importer of discord; one worker thread does all the work
   mcp/
     server.py          FastMCP adapter: INSTRUCTIONS, get_guide, prompts, and every
                        catalogue tool registered in a loop (done)

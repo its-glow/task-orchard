@@ -274,9 +274,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("strategic", "use the strategic tier for the turns that follow", _tier(STRATEGIC)),
     Command("basic", "use the basic tier for the turns that follow", _tier(BASIC)),
     Command("help", "this list", _help),
-    Command(
-        "exit", "leave (Ctrl-D does the same)", _leave, aliases=("quit",), terminal_only=True
-    ),
+    Command("exit", "leave (Ctrl-D does the same)", _leave, aliases=("quit",), terminal_only=True),
     Command(
         "tools",
         "the tools the model has, with their parameters (? = optional)",

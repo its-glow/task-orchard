@@ -7,6 +7,10 @@ TASK_ORCHARD_TZ   IANA timezone name for the user, e.g. "Europe/London".
 TASK_ORCHARD_MODEL_BASIC      The app's model for everyday conversation.
 TASK_ORCHARD_MODEL_STRATEGIC  The app's model for work that needs more thought.
                   Both default to claude-haiku-5-5 (SPEC 10.2, two tiers).
+TASK_ORCHARD_DISCORD_TOKEN         The Discord bot's token (SPEC 10.5).
+TASK_ORCHARD_DISCORD_USER_ID       The one Discord user the bot answers.
+TASK_ORCHARD_DISCORD_IDLE_MINUTES  Idle time before a message is checked for
+                  continuing the conversation. Default: 30.
 
 `task-orchard chat` keeps a transcript in $XDG_CACHE_HOME/task-orchard/transcripts
 and its input history in $XDG_STATE_HOME/task-orchard/chat_history.
@@ -27,6 +31,9 @@ ENV_DB = "TASK_ORCHARD_DB"
 ENV_TZ = "TASK_ORCHARD_TZ"
 ENV_MODEL_BASIC = "TASK_ORCHARD_MODEL_BASIC"
 ENV_MODEL_STRATEGIC = "TASK_ORCHARD_MODEL_STRATEGIC"
+ENV_DISCORD_TOKEN = "TASK_ORCHARD_DISCORD_TOKEN"
+ENV_DISCORD_USER_ID = "TASK_ORCHARD_DISCORD_USER_ID"
+ENV_DISCORD_IDLE_MINUTES = "TASK_ORCHARD_DISCORD_IDLE_MINUTES"
 DEFAULT_MODEL = "claude-haiku-5-5"
 
 
@@ -54,6 +61,11 @@ class Settings:
     transcript_dir: Path = field(default_factory=lambda: default_transcript_dir(os.environ))
     # Lines typed into `chat`, for the up arrow across runs.
     chat_history: Path = field(default_factory=lambda: default_chat_history(os.environ))
+    # The Discord bot's settings, as given: `task-orchard discord` checks them, so a
+    # bad value stops only the bot. The token is a secret and is never shown.
+    discord_token: str | None = field(default=None, repr=False)
+    discord_user_id: str | None = None
+    discord_idle_minutes: str | None = None
 
 
 def default_db_path(env: Mapping[str, str]) -> Path:
@@ -111,4 +123,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         model_strategic=env.get(ENV_MODEL_STRATEGIC) or DEFAULT_MODEL,
         transcript_dir=default_transcript_dir(env),
         chat_history=default_chat_history(env),
+        discord_token=env.get(ENV_DISCORD_TOKEN) or None,
+        discord_user_id=env.get(ENV_DISCORD_USER_ID) or None,
+        discord_idle_minutes=env.get(ENV_DISCORD_IDLE_MINUTES) or None,
     )

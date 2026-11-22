@@ -13,6 +13,7 @@ There are three ways in, over the same service:
 | Way in | For | State |
 |---|---|---|
 | **The app**: `task-orchard chat` | Everyday use. Task Orchard's own assistant, with its guides, your charter and your profile always in front of the model. | Built |
+| **The app on Discord**: `task-orchard discord` | The same assistant in Discord direct messages, for one person. | Built |
 | **Another assistant**, over MCP | Reaching your tasks from an assistant you are already working in, or one that also has your calendar. It gets the same tools, but may not follow the guides. | Built |
 | **REST** | Programs and, later, a phone app. | Phase 6 |
 
@@ -104,6 +105,9 @@ Just describe them: "Pay rent on the 1st of every month", "Weekly report every F
 | `TASK_ORCHARD_TZ` | Your timezone as an IANA name, such as `Europe/London`. | `$TZ`, then the system timezone, else UTC. |
 | `TASK_ORCHARD_MODEL_BASIC` | The model for everyday conversation with the assistant. | `claude-haiku-5-5` |
 | `TASK_ORCHARD_MODEL_STRATEGIC` | The model for work that needs more thought, chosen with `chat --strategic` or `/strategic`. | `claude-haiku-5-5` |
+| `TASK_ORCHARD_DISCORD_TOKEN` | The Discord bot's token. Keep it secret. | none |
+| `TASK_ORCHARD_DISCORD_USER_ID` | Your Discord user id: the one person the bot answers. | none |
+| `TASK_ORCHARD_DISCORD_IDLE_MINUTES` | How long a Discord conversation can be idle before your next message is checked for continuing it. | `30` |
 
 The database is created and migrated automatically on first start. Times in results are shown in this timezone; if none can be detected, UTC is assumed and the assistant is told to ask you to set it. `task-orchard info` prints what is in use.
 
@@ -112,6 +116,7 @@ The database is created and migrated automatically on first start. Times in resu
 ```
 task-orchard chat         talk to Task Orchard's assistant in the terminal
 task-orchard ask "..."    one question, one answer, then exit
+task-orchard discord      the assistant as a Discord bot, in direct messages
 task-orchard mcp          the MCP server over stdio (what an MCP client launches)
 task-orchard              the same as mcp; so is `serve`, until phase 6
 task-orchard info         print the database, timezone and models in use
@@ -145,6 +150,25 @@ For testing, a few more look at what the model works with, without asking it. Th
 The input line has the usual editing keys and history (the up arrow reaches earlier runs too). Each `chat` keeps a transcript of every message and tool result as JSON lines, in a new file under `~/.cache/task-orchard/transcripts/` (its path is shown at the start); `chat --transcript FILE` appends to FILE instead, and `--no-transcript` keeps none. `ask "..."` runs one turn and exits: 0 on success, 1 if the model could not be reached.
 
 The two tiers differ in model (both Haiku by default) and in how much effort the model spends: medium for basic, high for strategic. Each conversation re-sends what came before; the prompt and the conversation are marked for caching to keep that cheap. When a conversation gets very long you are told, and `/new` starts afresh without losing anything, because your tasks and profile live in the database.
+
+## On Discord
+
+`task-orchard discord` runs the same assistant as a Discord bot that answers one person in direct messages. It runs until stopped (Ctrl-C), so start it somewhere that stays on.
+
+**Setting it up, once:**
+
+1. At <https://discord.com/developers/applications>, create a **New Application**. On its **Bot** page, **Reset Token** and copy the token into `TASK_ORCHARD_DISCORD_TOKEN`. No privileged intents are needed: the bot reads only direct messages.
+2. On **OAuth2**, in the URL generator, tick the scopes `bot` and `applications.commands` (no permissions are needed), open the URL it makes, and add the bot to a server of your own. Discord lets you message a bot only if you share a server with it; a private server with just you in it does.
+3. In Discord, turn on **Settings > Advanced > Developer Mode**, then right-click your own name and **Copy User ID** into `TASK_ORCHARD_DISCORD_USER_ID`.
+4. Run `uv run task-orchard discord`, then click the bot in the server's member list and send it a message. Its slash commands can take a minute to appear the first time; reloading Discord (Ctrl-R) helps.
+
+**Conversations.** Each message is a turn. Messages close together are one conversation. After a pause longer than `TASK_ORCHARD_DISCORD_IDLE_MINUTES` (30 by default), your next message is checked by the basic model: it continues the conversation only if the assistant had left you a question and you are answering it. Otherwise a new conversation starts, and the answer ends with a small *New conversation.* To be sure of continuing, use Discord's **Reply** on one of the assistant's messages; `/new` always starts afresh. Conversations live in memory, so restarting the bot starts afresh too.
+
+**Commands** are the same as in chat, as Discord slash commands: `/new`, `/strategic`, `/basic`, `/help`, and the testing ones `/tools`, `/tool` (with tool names offered as you type), `/last`, `/prompt` and `/usage`. Output comes in a code block, or as an attached file when it is long. Tool calls are not shown as they happen; `/last` shows the latest turn's, and the transcript has them all.
+
+**Transcripts** are kept as in chat, one file per run of the bot: `~/.cache/task-orchard/transcripts/discord-<time>.jsonl`, with each check of whether to continue recorded as a `continuity` line. `--transcript FILE` and `--no-transcript` work as in chat.
+
+The bot opens the database directly, like `chat`, so it can run beside an MCP client on the same file.
 
 ## Checking the data
 

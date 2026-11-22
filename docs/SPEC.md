@@ -1151,7 +1151,8 @@ The rule is that a conversation ends when it goes idle, unless it was left on an
 #### Answers
 
 - While a turn runs, the bot shows that it is typing.
-- An answer longer than Discord's 2,000 characters is sent as several messages, split at a paragraph break where there is one in reach, then at a line break, then anywhere.
+- An answer longer than Discord's 2,000 characters is sent as several messages, each cut at the last paragraph break in its second half, else the last line break there, else the last space there, else at 2,000 characters.
+- An answer with no text is sent as `(The model gave no answer.)`, since Discord sends no empty message.
 - Tool calls are not shown. The transcript has them, and `/last` shows the latest turn's.
 - A model that cannot be reached is reported in the same words as in `chat`.
 

@@ -172,11 +172,13 @@ class AnthropicModel:
             "model": self.model_id,
             "max_tokens": MAX_TOKENS,
             "system": marked,
-            "tools": tools,
             "messages": messages,
             "output_config": {"effort": self.effort},
             "cache_control": {"type": "ephemeral"},
         }
+        if tools:
+            # The continuity check (SPEC 10.5) offers none.
+            kwargs["tools"] = tools
         if self.model_id in FALLBACK_MODELS:
             kwargs["betas"] = [FALLBACK_BETA]
             kwargs["fallbacks"] = "default"

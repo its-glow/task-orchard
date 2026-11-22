@@ -3,6 +3,7 @@
     task-orchard              Run the MCP server over stdio (same as `mcp`).
     task-orchard chat         Talk to Task Orchard's assistant in the terminal.
     task-orchard ask TEXT     One question, one answer, then exit.
+    task-orchard discord      Run the assistant as a Discord bot, in direct messages.
     task-orchard mcp          Run the MCP server over stdio.
     task-orchard serve        The same, until Phase 6 makes it the HTTP service.
     task-orchard init         Create or migrate the database, then exit.
@@ -56,6 +57,14 @@ def _app(args: argparse.Namespace) -> int:
         strategic=args.strategic,
         transcript=getattr(args, "transcript", None),
         keep_transcript=not getattr(args, "no_transcript", False),
+    )
+
+
+def _discord(args: argparse.Namespace) -> int:
+    from task_orchard.discord_bot import client
+
+    return client.main(
+        load_settings(), transcript=args.transcript, keep_transcript=not args.no_transcript
     )
 
 
@@ -119,6 +128,7 @@ COMMANDS = {
     "mcp": _serve,
     "chat": _app,
     "ask": _app,
+    "discord": _discord,
     "init": _init,
     "info": _info,
     "seed-demo": _seed_demo,
@@ -146,6 +156,20 @@ def parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask", help="one question, one answer, then exit")
     ask.add_argument("text", help="what to ask")
     ask.add_argument("--strategic", action="store_true", help="use the strategic tier")
+    bot = sub.add_parser(
+        "discord",
+        help="run the assistant as a Discord bot, in direct messages",
+        description="Run Task Orchard's assistant as a Discord bot for one person, in direct "
+        "messages, until stopped. Settings: TASK_ORCHARD_DISCORD_TOKEN, "
+        "TASK_ORCHARD_DISCORD_USER_ID and TASK_ORCHARD_DISCORD_IDLE_MINUTES (see README.md).",
+    )
+    bot.add_argument(
+        "--transcript",
+        type=Path,
+        help="append every message to this file "
+        "(default: a new file in ~/.cache/task-orchard/transcripts)",
+    )
+    bot.add_argument("--no-transcript", action="store_true", help="keep no transcript")
     sub.add_parser("init", help="create or migrate the database, then exit")
     sub.add_parser("info", help="print the database, timezone and models in use")
     sub.add_parser("seed-demo", help="fill an EMPTY database with demo data")
