@@ -7,6 +7,7 @@ does and still pipe the answers.
 
 from __future__ import annotations
 
+import atexit
 import json
 import sys
 from collections.abc import Callable, Mapping
@@ -32,7 +33,9 @@ CREDENTIALS_HELP = (
     "Set ANTHROPIC_API_KEY, or log in with the ant CLI (ant auth login), then try again.\n"
     "Model calls are billed to that account."
 )
-COMMANDS_HELP = "/strategic and /basic switch tier, /new starts again, /quit leaves."
+COMMANDS_HELP = "/strategic and /basic switch tier, /new starts again, /exit or /quit leaves."
+EXIT_COMMANDS = ("/exit", "/quit")
+HISTORY_LINES = 1000
 LONG_SESSION = (
     "This conversation is getting long. /new starts a fresh one; your tasks and profile are kept."
 )
@@ -81,6 +84,48 @@ class _Trace:
             self.transcript.flush()
 
 
+def _line_reader(
+    stdin: TextIO, stdout: TextIO, stderr: TextIO, history: Path | None
+) -> Callable[[], str]:
+    """Return a function giving the next typed line, or "" at end of input.
+
+    At a real terminal, input() with the readline module gives line editing
+    (arrows, Ctrl-A, Ctrl-E) and history. Without it, a terminal echoes arrow
+    keys as escape codes and the cursor drifts from the text. Otherwise lines
+    are read plainly, which is what pipes and tests need.
+    """
+    if stdin is sys.stdin and stdout is sys.stdout and stdin.isatty() and stdout.isatty():
+        import readline
+
+        if history is not None:
+            readline.set_history_length(HISTORY_LINES)
+            try:
+                history.parent.mkdir(parents=True, exist_ok=True)
+                if history.exists():
+                    readline.read_history_file(history)
+                atexit.register(readline.write_history_file, history)
+            except OSError:
+                pass  # no history is better than no chat
+
+        def read_edited() -> str:
+            try:
+                return input("> ") + "\n"
+            except EOFError:
+                print(file=stderr)
+                return ""
+
+        return read_edited
+
+    interactive = stdin.isatty()
+
+    def read_plain() -> str:
+        if interactive:
+            print("> ", end="", file=stderr, flush=True)
+        return stdin.readline()
+
+    return read_plain
+
+
 def _announce(session: Session, stderr: TextIO) -> None:
     print(f"[{session.tier}: {_model_name(session.model)}]", file=stderr, flush=True)
 
@@ -93,12 +138,16 @@ def chat(
     timezone_detected: bool = True,
     strategic: bool = False,
     transcript: Path | None = None,
+    history: Path | None = None,
     stdin: TextIO = sys.stdin,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
     """A terminal conversation. Each line typed is a turn."""
-    log = transcript.open("a", encoding="utf-8") if transcript is not None else None
+    log = None
+    if transcript is not None:
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        log = transcript.open("a", encoding="utf-8")
     trace = _Trace(stderr, log)
 
     def new_session(tier: str) -> Session:
@@ -111,19 +160,19 @@ def chat(
 
     try:
         print(f"Task Orchard. {COMMANDS_HELP}", file=stderr, flush=True)
+        if transcript is not None:
+            print(f"Transcript: {transcript}", file=stderr, flush=True)
         session = new_session(STRATEGIC if strategic else BASIC)
         warned = False
-        interactive = stdin.isatty()
+        read_line = _line_reader(stdin, stdout, stderr, history)
         while True:
-            if interactive:
-                print("> ", end="", file=stderr, flush=True)
-            line = stdin.readline()
+            line = read_line()
             if not line:
                 break
             text = line.strip()
             if not text:
                 continue
-            if text == "/quit":
+            if text in EXIT_COMMANDS:
                 break
             if text == "/new":
                 session = new_session(BASIC)
@@ -189,9 +238,14 @@ def main(
     text: str | None = None,
     strategic: bool = False,
     transcript: Path | None = None,
+    keep_transcript: bool = True,
     credentials: Callable[[], bool] | None = None,
 ) -> int:
-    """The entry point cli uses. Checks credentials before anything is read."""
+    """The entry point cli uses. Checks credentials before anything is read.
+
+    `chat` keeps a transcript unless told not to: in `transcript` if given,
+    otherwise in a new file under the settings' transcript directory.
+    """
     if not (credentials or has_credentials)():
         print(CREDENTIALS_HELP, file=sys.stderr)
         return 1
@@ -204,4 +258,9 @@ def main(
     }
     if command == "ask":
         return ask(orchard, clock, text or "", **common)
-    return chat(orchard, clock, transcript=transcript, **common)
+    if not keep_transcript:
+        transcript = None
+    elif transcript is None:
+        stamp = clock.now().strftime("chat-%Y%m%d-%H%M%SZ.jsonl")
+        transcript = settings.transcript_dir / stamp
+    return chat(orchard, clock, transcript=transcript, history=settings.chat_history, **common)

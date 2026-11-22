@@ -93,3 +93,10 @@ def test_system_prompt_has_two_text_blocks() -> None:
     blocks = system_prompt(load_guides(), {"notes": []}, timezone_detected=True)
     assert [b["type"] for b in blocks] == ["text", "text"]
     assert all("cache_control" not in b for b in blocks)  # caching is model.py's business
+
+
+def test_no_guide_names_a_tool_only_mcp_has() -> None:
+    """The guides are shared with the app, which has no get_guide (SPEC 9). Haiku
+    in the app tried to call it after the overview mentioned it."""
+    for guide in load_guides().values():
+        assert "get_guide" not in guide.body, guide.name

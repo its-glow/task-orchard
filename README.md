@@ -71,9 +71,9 @@ Run them with `uv run task-orchard ...` from the repository, or `uv run --direct
 |---|---|
 | `/strategic`, `/basic` | Switch between the two model tiers for the turns that follow. The conversation carries over. A session starts on basic, or on strategic with `chat --strategic`. |
 | `/new` | Start a fresh conversation, which reads your profile again. |
-| `/quit` | Leave. End of input (Ctrl-D) does the same. |
+| `/exit`, `/quit` | Leave. End of input (Ctrl-D) does the same. |
 
-`chat --transcript FILE` appends every message and tool result to FILE as JSON lines. `ask "..."` runs one turn and exits: 0 on success, 1 if the model could not be reached.
+The input line has the usual editing keys and history (the up arrow reaches earlier runs too). Each `chat` keeps a transcript of every message and tool result as JSON lines, in a new file under `~/.cache/task-orchard/transcripts/` (its path is shown at the start); `chat --transcript FILE` appends to FILE instead, and `--no-transcript` keeps none. `ask "..."` runs one turn and exits: 0 on success, 1 if the model could not be reached.
 
 The two tiers differ in model (both Haiku by default) and in how much effort the model spends: medium for basic, high for strategic. Each conversation re-sends what came before; the prompt and the conversation are marked for caching to keep that cheap. When a conversation gets very long you are told, and `/new` starts afresh without losing anything, because your tasks and profile live in the database.
 

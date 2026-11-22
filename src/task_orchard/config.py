@@ -8,6 +8,9 @@ TASK_ORCHARD_MODEL_BASIC      The app's model for everyday conversation.
 TASK_ORCHARD_MODEL_STRATEGIC  The app's model for work that needs more thought.
                   Both default to claude-haiku-5-5 (SPEC 10.2, two tiers).
 
+`task-orchard chat` keeps a transcript in $XDG_CACHE_HOME/task-orchard/transcripts
+and its input history in $XDG_STATE_HOME/task-orchard/chat_history.
+
 The timezone matters: date-only deadlines, "today", and recurrence schedules
 are all interpreted in it (SPEC section 3).
 """
@@ -16,7 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -47,11 +50,25 @@ class Settings:
     timezone_explicit: bool = False
     model_basic: str = DEFAULT_MODEL
     model_strategic: str = DEFAULT_MODEL
+    # Where `chat` writes a transcript when no --transcript is given.
+    transcript_dir: Path = field(default_factory=lambda: default_transcript_dir(os.environ))
+    # Lines typed into `chat`, for the up arrow across runs.
+    chat_history: Path = field(default_factory=lambda: default_chat_history(os.environ))
 
 
 def default_db_path(env: Mapping[str, str]) -> Path:
     base = env.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     return Path(base) / "task-orchard" / "orchard.db"
+
+
+def default_transcript_dir(env: Mapping[str, str]) -> Path:
+    base = env.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "task-orchard" / "transcripts"
+
+
+def default_chat_history(env: Mapping[str, str]) -> Path:
+    base = env.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "task-orchard" / "chat_history"
 
 
 def _system_zone_name() -> str | None:
@@ -92,4 +109,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         timezone_explicit=bool(env.get(ENV_TZ)),
         model_basic=env.get(ENV_MODEL_BASIC) or DEFAULT_MODEL,
         model_strategic=env.get(ENV_MODEL_STRATEGIC) or DEFAULT_MODEL,
+        transcript_dir=default_transcript_dir(env),
+        chat_history=default_chat_history(env),
     )

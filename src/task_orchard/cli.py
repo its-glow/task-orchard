@@ -51,6 +51,7 @@ def _app(args: argparse.Namespace) -> int:
         text=getattr(args, "text", None),
         strategic=args.strategic,
         transcript=getattr(args, "transcript", None),
+        keep_transcript=not getattr(args, "no_transcript", False),
     )
 
 
@@ -117,7 +118,13 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("serve", help="the same as mcp, until Phase 6")
     chat = sub.add_parser("chat", help="talk to Task Orchard's assistant in the terminal")
     chat.add_argument("--strategic", action="store_true", help="start on the strategic tier")
-    chat.add_argument("--transcript", type=Path, help="append every message to this file")
+    chat.add_argument(
+        "--transcript",
+        type=Path,
+        help="append every message to this file "
+        "(default: a new file in ~/.cache/task-orchard/transcripts)",
+    )
+    chat.add_argument("--no-transcript", action="store_true", help="keep no transcript")
     ask = sub.add_parser("ask", help="one question, one answer, then exit")
     ask.add_argument("text", help="what to ask")
     ask.add_argument("--strategic", action="store_true", help="use the strategic tier")

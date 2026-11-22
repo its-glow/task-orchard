@@ -143,6 +143,8 @@ def test_quit_and_end_of_input_exit(orchard: Orchard, clock: FixedClock) -> None
     assert code == 0 and out == "" and models[BASIC].requests == []
     code, out, _, _ = run_chat(orchard, clock, [], basic=[])
     assert code == 0 and out == ""
+    code, out, _, models = run_chat(orchard, clock, ["/exit", "never read"], basic=[])
+    assert code == 0 and out == "" and models[BASIC].requests == []
 
 
 def test_a_model_failure_ends_the_turn_not_the_chat(orchard: Orchard, clock: FixedClock) -> None:
@@ -178,6 +180,46 @@ def test_the_transcript_has_one_json_line_per_message_and_tool_outcome(
         ("message", "assistant", None),
     ]
     assert all(r["session"] == 1 for r in records)
+
+
+def test_the_transcript_path_is_announced(
+    orchard: Orchard, clock: FixedClock, tmp_path: Path
+) -> None:
+    path = tmp_path / "chat.jsonl"
+    _, _, err, _ = run_chat(orchard, clock, [], transcript=path)
+    assert f"Transcript: {path}" in err
+
+
+def _main_transcript(monkeypatch, orchard, clock, tmp_path, **kw):
+    """Run main for chat with the conversation itself stubbed out; return the transcript."""
+    seen = {}
+    monkeypatch.setattr(chat_module, "models_for", lambda settings: {})
+    monkeypatch.setattr(chat_module, "chat", lambda *a, **k: seen.update(k) or 0)
+    settings = cli.load_settings({"XDG_CACHE_HOME": str(tmp_path / "cache")})
+    code = chat_module.main(
+        "chat", settings, lambda: (orchard, clock), credentials=lambda: True, **kw
+    )
+    assert code == 0
+    return seen["transcript"]
+
+
+def test_chat_keeps_a_transcript_by_default(
+    monkeypatch, orchard: Orchard, clock: FixedClock, tmp_path: Path
+) -> None:
+    path = _main_transcript(monkeypatch, orchard, clock, tmp_path)
+    assert path.parent == tmp_path / "cache" / "task-orchard" / "transcripts"
+    assert path.name == clock.now().strftime("chat-%Y%m%d-%H%M%SZ.jsonl")
+    explicit = tmp_path / "mine.jsonl"
+    assert _main_transcript(monkeypatch, orchard, clock, tmp_path, transcript=explicit) == explicit
+    assert _main_transcript(monkeypatch, orchard, clock, tmp_path, keep_transcript=False) is None
+
+
+def test_chat_creates_the_transcript_directory(
+    orchard: Orchard, clock: FixedClock, tmp_path: Path
+) -> None:
+    path = tmp_path / "new" / "dir" / "chat.jsonl"
+    run_chat(orchard, clock, [], transcript=path)
+    assert path.exists()
 
 
 def test_the_long_session_notice_appears_once(orchard: Orchard, clock: FixedClock) -> None:
