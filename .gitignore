@@ -8,3 +8,6 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+
+# Local secrets (Discord bot token)
+discord_vars.sh
