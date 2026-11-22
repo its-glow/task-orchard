@@ -72,10 +72,25 @@ Run them with `uv run task-orchard ...` from the repository, or `uv run --direct
 | `/strategic`, `/basic` | Switch between the two model tiers for the turns that follow. The conversation carries over. A session starts on basic, or on strategic with `chat --strategic`. |
 | `/new` | Start a fresh conversation, which reads your profile again. |
 | `/exit`, `/quit` | Leave. End of input (Ctrl-D) does the same. |
+| `/help` | List the commands. |
+
+For testing, a few more look at what the model works with, without asking it. The model never sees them.
+
+| For testing | Shows |
+|---|---|
+| `/tools` | The model's tools and their parameters. |
+| `/tool NAME [JSON]` | Runs a read-only tool and prints its JSON result, e.g. `/tool get_candidates {"minutes_available": 30}`. |
+| `/last` | The full results of the tool calls in the last turn. |
+| `/prompt` | The system prompt as sent. |
+| `/usage` | Tokens and estimated cost of each request in this conversation, including what was read from the cache. |
 
 The input line has the usual editing keys and history (the up arrow reaches earlier runs too). Each `chat` keeps a transcript of every message and tool result as JSON lines, in a new file under `~/.cache/task-orchard/transcripts/` (its path is shown at the start); `chat --transcript FILE` appends to FILE instead, and `--no-transcript` keeps none. `ask "..."` runs one turn and exits: 0 on success, 1 if the model could not be reached.
 
 The two tiers differ in model (both Haiku by default) and in how much effort the model spends: medium for basic, high for strategic. Each conversation re-sends what came before; the prompt and the conversation are marked for caching to keep that cheap. When a conversation gets very long you are told, and `/new` starts afresh without losing anything, because your tasks and profile live in the database.
+
+## Checking the data
+
+`task-orchard dump` prints every task as CSV, one line per task: the stored fields, then what is worked out from them (blocked, dormant, candidate, overdue, at risk, and the effective priority, deadline and motive). `--open` keeps open tasks only; `--sources` adds where each value came from (`guess`, `user`, ...). Pipe it through `grep`, or save it as a `.csv`. Every command lists its options with `--help`.
 
 ## From another assistant (MCP)
 

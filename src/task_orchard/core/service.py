@@ -43,7 +43,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from task_orchard.config import Settings
-from task_orchard.core import graph, history, review, shortlist, views, wire
+from task_orchard.core import dump, graph, history, review, shortlist, views, wire
 from task_orchard.core import recurrence as recur
 from task_orchard.core.clock import Clock, SystemClock
 from task_orchard.core.derive import Snapshot
@@ -2008,6 +2008,14 @@ class Orchard:
         with self.tx() as tx:
             activity = review.recent_activity(tx.session, tx.now, days)
             return self._respond(tx, activity, keep=["balance"])
+
+    # --- dump (10.4): for the command line, not a tool ---
+
+    def dump(self, *, open_only: bool = False, sources: bool = False) -> list[dict[str, str]]:
+        """Every task as a flat row of strings, stored fields then derived facts."""
+        with self.tx() as tx:
+            snap = Snapshot(tx.session, tx.now)
+            return dump.rows(snap, tx.tz, open_only=open_only, sources=sources)
 
     # --- find_patterns, save_pattern (8.17) ---
 

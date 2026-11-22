@@ -12,7 +12,7 @@ from task_orchard import cli
 from task_orchard.agent import chat as chat_module
 from task_orchard.agent.chat import CREDENTIALS_HELP, LONG_SESSION, ask, chat, tool_line
 from task_orchard.agent.loop import SESSION_TOKEN_LIMIT
-from task_orchard.agent.model import BASIC, STRATEGIC, ModelUnavailable
+from task_orchard.agent.model import BASIC, STRATEGIC, ModelUnavailable, Reply, Usage, cost
 from task_orchard.core.clock import FixedClock
 from task_orchard.core.service import Orchard
 from tests.scripted import ScriptedModel, calls, text
@@ -261,3 +261,119 @@ def test_missing_credentials_exit_1_before_any_input(
     assert CREDENTIALS_HELP in captured.err
     assert captured.out == ""
     assert not (tmp_path / "never.db").exists()  # nothing was opened either
+
+
+# --- /help and the tester commands (SPEC 10.2). None of them reaches the model. ---
+
+
+def test_help_lists_every_command(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, err, models = run_chat(orchard, clock, ["/help", "/nonsense"])
+    for command in ("/new", "/strategic", "/basic", "/help", "/exit", "/quit", "/tools",
+                    "/tool", "/last", "/prompt", "/usage"):  # fmt: skip
+        assert command in err, command
+    assert "Unknown command" in err and "/help" in err.split("Unknown command")[1]
+    assert out == "" and models[BASIC].requests == []
+
+
+def test_tools_lists_the_catalogue(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, _, models = run_chat(orchard, clock, ["/tools"])
+    assert "get_candidates(" in out and "minutes_available?" in out
+    assert "task_id)" in out  # get_task's one required parameter
+    assert "read-only" in out
+    assert models[BASIC].requests == []
+
+
+def test_tool_runs_a_read_only_tool_without_the_model(
+    orchard: Orchard, clock: FixedClock, seeded
+) -> None:
+    line = f'/tool get_task {{"task_id": {seeded["milk"]}}}'
+    _, out, err, models = run_chat(orchard, clock, [line, "/tool read_profile"])
+    first = out.index("\n}\n") + 3
+    assert json.loads(out[:first])["task"]["title"] == "Buy milk"
+    assert "now" in json.loads(out[first:])
+    assert models[BASIC].requests == []
+
+
+def test_tool_refuses_writes_and_bad_input(orchard: Orchard, clock: FixedClock, seeded) -> None:
+    before = orchard.get_task(seeded["milk"])["task"]
+    _, out, err, _ = run_chat(
+        orchard,
+        clock,
+        [
+            f'/tool drop_tasks {{"task_ids": [{seeded["milk"]}]}}',
+            "/tool get_task {not json",
+            "/tool no_such_tool",
+            "/tool",
+        ],
+    )
+    assert orchard.get_task(seeded["milk"])["task"] == before
+    assert "read-only" in err and "not valid JSON" in err and "no_such_tool" in err
+    assert "Usage: /tool NAME" in err
+
+
+def test_tool_errors_print_the_payload(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, _, _ = run_chat(orchard, clock, ['/tool get_task {"task_id": 99999}'])
+    assert json.loads(out)["error"] == "not_found"
+
+
+def test_last_shows_the_full_results_of_the_last_turn(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, _, _ = run_chat(
+        orchard,
+        clock,
+        ["/last", "Profile?", "/last"],
+        basic=[calls(("read_profile", {})), text("Here.")],
+    )
+    answer, shown = out.split("Here.\n")
+    assert answer == ""
+    assert shown.startswith("-> read_profile()\n")
+    assert json.loads(shown.split("\n", 1)[1])["now"]
+
+
+def test_last_before_any_tool_call(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, err, _ = run_chat(orchard, clock, ["/last"])
+    assert out == "" and "No tool calls" in err
+
+
+def test_prompt_prints_the_system_prompt(orchard: Orchard, clock: FixedClock) -> None:
+    _, out, _, _ = run_chat(orchard, clock, ["/prompt"])
+    assert "You are Task Orchard's assistant." in out
+    assert "## Guide: triage" in out
+    assert "cached" in out
+
+
+def test_usage_reports_each_request(orchard: Orchard, clock: FixedClock) -> None:
+    figures = Usage(input=300, cache_write=12_000, cache_read=0, output=200)
+    reply = Reply(content=[{"type": "text", "text": "Hi."}], stop="end", usage=figures)
+    models = {BASIC: ScriptedModel([reply], "claude-haiku-5-5"), STRATEGIC: ScriptedModel([])}
+    out, err = io.StringIO(), io.StringIO()
+    chat(
+        orchard, clock, models=models, stdin=io.StringIO("Hello\n/usage\n"), stdout=out, stderr=err
+    )
+    shown = out.getvalue().split("Hi.\n")[1]
+    assert "claude-haiku-5-5" in shown and "12,000" in shown and "$" in shown
+
+
+def test_usage_is_written_to_the_transcript(
+    orchard: Orchard, clock: FixedClock, tmp_path: Path
+) -> None:
+    figures = Usage(input=10, cache_write=0, cache_read=5000, output=50)
+    reply = Reply(content=[{"type": "text", "text": "Hi."}], stop="end", usage=figures)
+    models = {BASIC: ScriptedModel([reply], "m"), STRATEGIC: ScriptedModel([])}
+    path = tmp_path / "t.jsonl"
+    chat(orchard, clock, models=models, stdin=io.StringIO("Hello\n"), stdout=io.StringIO(),
+         stderr=io.StringIO(), transcript=path)  # fmt: skip
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    usage = [r for r in records if r["type"] == "usage"]
+    assert usage == [
+        {"session": 1, "type": "usage", "model": "m", "input": 10, "cache_write": 0,
+         "cache_read": 5000, "output": 50},
+    ]  # fmt: skip
+
+
+def test_cost_estimate() -> None:
+    short = Usage(input=50_000, cache_write=10_000, cache_read=20_000, output=1_000)
+    expected = (50_000 * 0.10 + 10_000 * 0.125 + 20_000 * 0.01 + 1_000 * 0.50) / 1e6
+    assert cost("claude-haiku-5-5", short) == pytest.approx(expected)
+    long = Usage(input=200_000)  # over 100k: Haiku 5.5's long-prompt rate, x5
+    assert cost("claude-haiku-5-5", long) == pytest.approx(0.10)
+    assert cost("unknown-model", short) is None

@@ -56,5 +56,6 @@ def _report(result: Run, model: Any) -> None:
         print(f"  -> {name}({arguments})", file=sys.stderr)
     for answer in result.answers:
         print(f"  answer: {answer}", file=sys.stderr)
-    for i, usage in enumerate(getattr(model, "usage", []), start=1):
-        print(f"  request {i}: {usage}", file=sys.stderr)
+    usage = [e for e in result.events if e["type"] == "usage"]
+    for i, figures in enumerate(usage, start=1):
+        print(f"  request {i}: {figures}", file=sys.stderr)

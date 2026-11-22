@@ -39,6 +39,28 @@ FALLBACK_MODELS = frozenset(
 )
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
+
+@dataclass(frozen=True)
+class Price:
+    """US dollars per million tokens. Cache writes are the 5-minute kind."""
+
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    # Haiku 5.5 charges more for a prompt over this many tokens: every rate x5.
+    long_above: int | None = None
+    long_factor: float = 1.0
+
+
+# For the estimate /usage shows (Claude API docs, 2026-11). Update when models
+# or prices change; a model not listed gets token counts and no cost.
+PRICES = {
+    "claude-haiku-5-5": Price(0.10, 0.50, 0.01, 0.125, long_above=100_000, long_factor=5.0),
+    "claude-sonnet-5-5": Price(2.00, 10.00, 0.10, 2.50),
+    "claude-opus-5-5": Price(4.00, 20.00, 0.20, 5.00),
+}
+
 Stop = Literal["end", "tool_use", "max_tokens", "refusal"]
 _STOPS: dict[str, Stop] = {
     "end_turn": "end",
@@ -49,12 +71,45 @@ _STOPS: dict[str, Stop] = {
 
 
 @dataclass(frozen=True)
+class Usage:
+    """The token figures of one request, as the API reports them."""
+
+    input: int = 0  # not read from or written to the cache
+    cache_write: int = 0
+    cache_read: int = 0
+    output: int = 0
+
+    @property
+    def prompt(self) -> int:
+        return self.input + self.cache_write + self.cache_read
+
+
+def cost(model_id: str, usage: Usage) -> float | None:
+    """Estimated US dollars for one request, or None for a model with no price."""
+    price = PRICES.get(model_id)
+    if price is None:
+        return None
+    factor = 1.0
+    if price.long_above is not None and usage.prompt > price.long_above:
+        factor = price.long_factor
+    total = (
+        usage.input * price.input
+        + usage.cache_write * price.cache_write
+        + usage.cache_read * price.cache_read
+        + usage.output * price.output
+    )
+    return total * factor / 1_000_000
+
+
+@dataclass(frozen=True)
 class Reply:
     # The reply's blocks as plain dicts, opaque to the loop apart from text and tool calls.
     content: list[dict[str, Any]]
     stop: Stop
     # Everything the request sent, cached or not.
     input_tokens: int = 0
+    # The full figures, when the model reports them.
+    usage: Usage | None = None
 
 
 class Model(Protocol):
@@ -92,8 +147,6 @@ class AnthropicModel:
         self.model_id = model_id
         self.effort = effort
         self._client: Any = None
-        # Token figures of every request, for checking that the cache is read.
-        self.usage: list[dict[str, int]] = []
 
     def _messages_api(self) -> Any:
         if self._client is None:
@@ -147,16 +200,16 @@ class AnthropicModel:
             if "authentication" not in str(err):
                 raise
             raise ModelUnavailable(str(err)) from err
-        usage = response.usage
-        figures = {
-            "input": usage.input_tokens or 0,
-            "cache_write": usage.cache_creation_input_tokens or 0,
-            "cache_read": usage.cache_read_input_tokens or 0,
-        }
-        self.usage.append(figures)
-        input_tokens = sum(figures.values())
+        reported = response.usage
+        usage = Usage(
+            input=reported.input_tokens or 0,
+            cache_write=reported.cache_creation_input_tokens or 0,
+            cache_read=reported.cache_read_input_tokens or 0,
+            output=reported.output_tokens or 0,
+        )
         return Reply(
             content=[block.to_dict(mode="json") for block in response.content],
             stop=_STOPS.get(response.stop_reason or "", "end"),
-            input_tokens=input_tokens,
+            input_tokens=usage.prompt,
+            usage=usage,
         )

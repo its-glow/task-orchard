@@ -8,6 +8,9 @@
     task-orchard init         Create or migrate the database, then exit.
     task-orchard info         Print the database, timezone and models in use.
     task-orchard seed-demo    Fill an EMPTY database with demo data.
+    task-orchard dump         Every task as CSV on stdout, for checking by hand.
+
+Every command takes --help, which lists its options.
 
 Configuration comes from the environment; see task_orchard/config.py.
 
@@ -18,6 +21,7 @@ for a human must go to stderr. In chat and ask, stdout carries only answers.
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -97,6 +101,19 @@ def _seed_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dump(args: argparse.Namespace) -> int:
+    from task_orchard.core.dump import columns
+
+    orchard = Orchard.open(load_settings())
+    rows = orchard.dump(open_only=args.open, sources=args.sources)
+    writer = csv.DictWriter(
+        sys.stdout, fieldnames=columns(sources=args.sources), lineterminator="\n"
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return 0
+
+
 COMMANDS = {
     "serve": _serve,
     "mcp": _serve,
@@ -105,6 +122,7 @@ COMMANDS = {
     "init": _init,
     "info": _info,
     "seed-demo": _seed_demo,
+    "dump": _dump,
 }
 
 
@@ -131,6 +149,17 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="create or migrate the database, then exit")
     sub.add_parser("info", help="print the database, timezone and models in use")
     sub.add_parser("seed-demo", help="fill an EMPTY database with demo data")
+    dump = sub.add_parser(
+        "dump",
+        help="print every task as CSV, for checking by hand",
+        description="Print every task as CSV on stdout, one line per task: the stored "
+        "fields, then the derived facts the assistant works from, computed now. "
+        "Description and notes are left out.",
+    )
+    dump.add_argument("--open", action="store_true", help="open tasks only")
+    dump.add_argument(
+        "--sources", action="store_true", help="add a column per tracked field: guess, user, ..."
+    )
     return top
 
 

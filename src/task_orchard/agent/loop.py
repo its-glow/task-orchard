@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from task_orchard.agent.model import BASIC, TIERS, Model, Reply
@@ -122,6 +122,9 @@ def run_turn(session: Session, user_text: str) -> str:
     for _ in range(MAX_STEPS):
         reply = session.model.respond(session.system, session.tool_specs, session.messages)
         session.input_tokens = reply.input_tokens
+        if reply.usage is not None:
+            model_id = str(getattr(session.model, "model_id", type(session.model).__name__))
+            session.emit({"type": "usage", "model": model_id, **asdict(reply.usage)})
         session.append({"role": "assistant", "content": reply.content})
         calls = [block for block in reply.content if block.get("type") == "tool_use"]
         if reply.stop != "tool_use" or not calls:

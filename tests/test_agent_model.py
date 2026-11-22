@@ -49,7 +49,10 @@ class FakeMessages:
 
 def response(stop: str, *blocks: dict[str, Any]) -> Any:
     usage = SimpleNamespace(
-        input_tokens=100, cache_creation_input_tokens=None, cache_read_input_tokens=4000
+        input_tokens=100,
+        cache_creation_input_tokens=None,
+        cache_read_input_tokens=4000,
+        output_tokens=50,
     )
     return SimpleNamespace(content=[FakeBlock(b) for b in blocks], stop_reason=stop, usage=usage)
 

@@ -22,6 +22,7 @@ uv run pytest tests/test_x.py -k name
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format
 uv run task-orchard info     # which database, timezone and models are in use
+uv run task-orchard dump     # every task as CSV, derived facts included (--open, --sources)
 TASK_ORCHARD_DB=/tmp/demo.db uv run task-orchard seed-demo   # a populated database to try things on
 ```
 
@@ -47,6 +48,7 @@ src/task_orchard/
     shortlist.py       get_candidates, get_critical; the 5.5 constants (done)
     history.py         counts, digests, the balance        (done)
     review.py          review queue, recent activity       (done)
+    dump.py            every task as flat rows, for `task-orchard dump`
     recurrence.py      roll_forward and friends            (done)
   db/
     models.py          the schema; source of truth (done)
@@ -59,6 +61,7 @@ src/task_orchard/
     prompt.py          builds the system prompt: preamble, guides, profile; the [Now:] line
     loop.py            Session, start_session, run_turn: the tool-use loop; MAX_STEPS
     chat.py            task-orchard chat and ask
+    commands.py        chat's tester commands: /tools, /tool, /last, /prompt, /usage
   mcp/
     server.py          FastMCP adapter: INSTRUCTIONS, get_guide, prompts, and every
                        catalogue tool registered in a loop (done)
