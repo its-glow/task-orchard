@@ -11,11 +11,13 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Any
 
-from task_orchard.core.enums import TRACKED_FIELDS, FieldSource
+from task_orchard.core.enums import TRACKED_FIELDS, UNTRACKED_FIELDS, FieldSource
 from task_orchard.core.errors import Invalid
 
 TITLE_MAX_CHARS = 500
 NOTES_MAX_CHARS = 20_000
+CONDITIONS_MAX = 5
+CONDITION_MAX_CHARS = 30
 CAPTURE_MAX_ITEMS = 20
 
 
@@ -88,8 +90,18 @@ def conditions(value: Any) -> list[str]:
         if not isinstance(tag, str):
             raise Invalid("Each condition must be text.", hint='For example "at-home".')
         cleaned = "-".join(tag.strip().lower().split())
+        if len(cleaned) > CONDITION_MAX_CHARS:
+            raise Invalid(
+                f"The condition {cleaned[:40]!r} is longer than {CONDITION_MAX_CHARS} characters.",
+                hint='A condition is a short tag, such as "at-home" or "good-weather".',
+            )
         if cleaned and cleaned not in out:
             out.append(cleaned)
+    if len(out) > CONDITIONS_MAX:
+        raise Invalid(
+            f"{len(out)} conditions given; a task has at most {CONDITIONS_MAX}.",
+            hint="Keep the conditions that really decide when it can be done.",
+        )
     return out
 
 
@@ -114,8 +126,9 @@ def ids(value: Any, param: str) -> list[int]:
 def sources(value: Any) -> dict[str, FieldSource]:
     """The `sources` object of SPEC 4.5. `firmness` is accepted as `deadline`.
 
-    An entry for a field the call does not write is ignored; an entry for a
-    field that is not tracked is invalid, since it is almost always a typo.
+    An entry for a field the call does not write, or for a real field that
+    carries no source (`recurrence`, `title`), is ignored. Any other name is
+    invalid, since it is almost always a typo.
     """
     if value is None:
         return {}
@@ -127,6 +140,8 @@ def sources(value: Any) -> dict[str, FieldSource]:
         name = _key(str(field))
         if name in ("firmness", "deadline_firmness"):
             name = "deadline"
+        if name in UNTRACKED_FIELDS:
+            continue
         if name not in TRACKED_FIELDS:
             raise Invalid(
                 f"sources names {field!r}, which is not a tracked field.",

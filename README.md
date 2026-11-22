@@ -4,7 +4,7 @@ A task and time management service for one person, with its own AI assistant.
 
 You cultivate trees of tasks: big vague efforts, one-line reminders, recurring chores, things you want to do more of. In return the assistant helps you decide what to work on when you need it, using facts the server computes and what it has learned about how your work actually goes.
 
-**Status:** phases 0–4 of [`docs/SPEC.md`](docs/SPEC.md) are built. You can talk to Task Orchard's own assistant in the terminal, or reach the same tools from another assistant over MCP. You can capture, create, organise, link and search tasks, ask for a shortlist of what to do now or for what is urgent, break tasks down, start, complete, snooze, drop and reopen them, file work under patterns, keep a profile, and set up tasks that repeat on a schedule ("every Friday by 5") or loosely ("about every five days"). Review and merging arrive in phase 5 (see [What works yet](#what-works-yet)).
+**Status:** phases 0–5 of [`docs/SPEC.md`](docs/SPEC.md) are built. You can talk to Task Orchard's own assistant in the terminal, or reach the same tools from another assistant over MCP. You can capture, create, organise, link and search tasks, ask for a shortlist of what to do now or for what is urgent, break tasks down, start, complete, snooze, drop and reopen them, file work under patterns, keep a profile, and set up tasks that repeat on a schedule ("every Friday by 5") or loosely ("about every five days"), plan a block of time, run a weekly review or a housekeeping pass, merge duplicates, and onboard a new user. The long-running service (REST, MCP over HTTP, unattended runs) arrives in phase 6 (see [What works yet](#what-works-yet)).
 
 ## How you use it
 
@@ -147,10 +147,15 @@ With the demo database, start `task-orchard chat`, try these, and watch the tool
 | "I need to pay the rent on the 1st of every month." | `create_task` with a scheduled `recurrence` (`FREQ=MONTHLY;BYMONTHDAY=1`); the answer gives the next date, 1st of next month. |
 | "Just got back from a run, about 40 minutes." | `complete_task` on the flexible running task; it sleeps for its two-day gap, and the answer says when it comes back. |
 | "I'm away for two weeks; pause the weekly summary." | `snooze_task` on the scheduled summary: a pause. No occurrences spawn while it lasts, and none are marked missed. |
+| "I've got two hours this afternoon. Plan it." | The `plan-time-block` guide: `get_candidates` with `minutes_available: 120` and `get_recent_activity`; a numbered plan with start times and a buffer. Here the release work alone nearly fills the block, so a good answer says so. |
+| "Can you do some housekeeping?" | The `housekeeping` guide: `get_review_queue`, fixes that need no decision, then a short list of what does (the dentist keeps being put off, the milk is overdue, the weekly summary was missed). |
+| "Let's do my weekly review." | The `weekly-review` guide: the week's completions and balance against the charter (no time on the game), then up to six stale items, each with drop, reshape or recommit. |
+| Say "remind me to buy milk" (the demo already has it), then "merge the two milk tasks." | `merge_tasks`; the survivor's notes say what was merged in. |
+| On an empty database (`TASK_ORCHARD_DB=/tmp/new.db`): "Hi, I'm new." | The `onboarding` guide, one step per message: the idea, a charter, the timezone (`set_timezone`), a brain-dump, things that repeat. |
 
 Things worth noticing: whether the assistant uses relative times ("in 2 days") rather than working out dates, whether it follows the guides when triaging or planning, and whether error messages lead it to a correct retry. Try the harder rows on both tiers.
 
-Six of these rows also run as automated scenarios against a real model: `uv run pytest -m scenario -s`. They are left out of the normal test run because they cost money.
+Eleven scenarios, covering most of these rows and every guide, run against a real model: `uv run pytest -m scenario -s`. They are left out of the normal test run because they cost money.
 
 ## What works yet
 
@@ -161,6 +166,6 @@ Six of these rows also run as automated scenarios against a real model: `uv run 
 | 2A | The app: `task-orchard chat` and `ask`, two model tiers, one shared tool catalogue, model scenarios | Built |
 | 3 | `subdivide_task`, `start_task`, `complete_task`, `snooze_task`, `drop_tasks`, `reopen_task`, `find_patterns`, `save_pattern`; guides `subdivide`, `complete-and-reflect` | Built |
 | 4 | Recurrence: scheduled and flexible tasks, occurrences spawned on time, pausing, the recurrence check | Built |
-| 5 | Review queue, activity, merging, `set_timezone`, onboarding and review guides | Not yet |
+| 5 | `get_review_queue`, `get_recent_activity`, `merge_tasks`, `set_timezone`, full pattern statistics; guides `onboarding`, `plan-time-block`, `housekeeping`, `weekly-review` | Built |
 | 6 | One long-running service: REST, MCP over HTTP, unattended runs (housekeeping, morning and evening) | Not yet |
 

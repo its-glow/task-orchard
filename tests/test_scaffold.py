@@ -257,5 +257,8 @@ async def test_instructions_warn_when_the_timezone_is_assumed(
     settings = load_settings({"TASK_ORCHARD_DB": str(tmp_path / "x.db"), "TASK_ORCHARD_TZ": "UTC"})
     quiet = build_server(orchard, settings)
     loud = build_server(orchard, replace(settings, timezone_detected=False))
-    assert "TASK_ORCHARD_TZ" not in quiet.instructions
-    assert "TASK_ORCHARD_TZ" in loud.instructions
+    assert "set_timezone" not in quiet.instructions
+    assert "set_timezone" in loud.instructions
+    orchard.set_timezone("Europe/London")
+    settled = build_server(orchard, replace(settings, timezone_detected=False))
+    assert "set_timezone" not in settled.instructions

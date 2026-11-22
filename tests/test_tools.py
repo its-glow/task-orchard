@@ -24,15 +24,19 @@ BUILT = [
     "snooze_task",
     "drop_tasks",
     "reopen_task",
+    "merge_tasks",
     "get_task",
     "get_tree",
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "get_review_queue",
+    "get_recent_activity",
     "find_patterns",
     "save_pattern",
     "read_profile",
     "write_profile_note",
+    "set_timezone",
 ]
 READ_ONLY = {
     "get_task",
@@ -40,6 +44,8 @@ READ_ONLY = {
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "get_review_queue",
+    "get_recent_activity",
     "find_patterns",
     "read_profile",
 }
@@ -140,7 +146,7 @@ def test_an_orchard_error_becomes_the_section_4_2_json(orchard: Orchard, tools: 
 
 
 def test_an_unknown_tool_is_invalid_and_lists_the_names(tools: list[Tool]) -> None:
-    outcome = call_tool(tools, "merge_tasks", {"source_id": 1, "into_id": 2})
+    outcome = call_tool(tools, "plant_seeds", {"row": 1})
     assert outcome.is_error
     assert outcome.payload["error"] == "invalid"
     assert "capture_tasks" in outcome.payload["hint"]
@@ -267,4 +273,26 @@ def test_recurrence_round_trips(orchard: Orchard, tools: list[Tool]) -> None:
     bad = call_tool(
         tools, "create_task", {"title": "X", "recurrence": {"mode": "flexible", "x": 1}}
     )
+    assert bad.is_error and bad.payload["error"] == "invalid"
+
+
+# --- Phase 5 tools, once each through call_tool ---
+
+
+def test_phase_5_tools_round_trip(orchard: Orchard, tools: list[Tool]) -> None:
+    def ok(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        outcome = call_tool(tools, name, arguments)
+        assert not outcome.is_error, (name, outcome.payload)
+        return outcome.payload
+
+    keep = ok("create_task", {"title": "Buy stamps"})["task"]["id"]
+    extra = ok("create_task", {"title": "buy stamps", "estimate_minutes": 10})["task"]["id"]
+    queue = ok("get_review_queue", {})
+    assert queue["duplicates"]["total"] == 1
+    merged = ok("merge_tasks", {"source_id": extra, "into_id": keep})
+    assert merged["task"]["estimate_minutes"] == 10
+    activity = ok("get_recent_activity", {"days": "3"})
+    assert activity["dropped_count"] == 1
+    assert ok("set_timezone", {"name": "Europe/Paris"})["timezone"] == "Europe/Paris"
+    bad = call_tool(tools, "get_recent_activity", {"days": 40})
     assert bad.is_error and bad.payload["error"] == "invalid"

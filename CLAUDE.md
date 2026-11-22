@@ -8,7 +8,7 @@ A single-user task and time management service with its own AI assistant. The se
 2. `IMPLEMENTATION_PLAN.md` — the design rationale: why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion) and 4 (recurrence) are done. Next is Phase 5, then 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.3 describe the catalogue, the app and the MCP adapter.
+Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion), 4 (recurrence) and 5 (learning and review) are done. Next is Phase 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.3 describe the catalogue, the app and the MCP adapter.
 
 The MCP adapter in `mcp/` is generated from the catalogue and must keep working, but it is not where behaviour is designed or tested. Do no MCP-specific work before Phase 6.
 
@@ -16,7 +16,7 @@ The MCP adapter in `mcp/` is generated from the catalogue and must keep working,
 
 ```
 uv sync                      # install
-uv run pytest                # all tests but scenarios (about 70 seconds)
+uv run pytest                # all tests but scenarios (about two minutes)
 uv run pytest -m scenario -s  # real-model scenarios: cost money, ask first
 uv run pytest tests/test_x.py -k name
 uv run ruff check src tests  # lint
@@ -41,11 +41,12 @@ src/task_orchard/
     service.py         Orchard: one method per operation (Phases 1-3 done)
     wire.py            reading arguments: lenient names, ids, sources (done)
     timefmt.py         parsing and formatting times        (done)
-    views.py           JSON row and detail builders        (done to Phase 4)
+    views.py           JSON row and detail builders        (done)
     graph.py           blocking graph and cycle checks     (done)
     derive.py          Snapshot: predicates, effective values, at risk (done)
     shortlist.py       get_candidates, get_critical; the 5.5 constants (done)
-    history.py         counts, digests, balance, review    (Phase 3 done; Phase 5)
+    history.py         counts, digests, the balance        (done)
+    review.py          review queue, recent activity       (done)
     recurrence.py      roll_forward and friends            (done)
   db/
     models.py          the schema; source of truth (done)
@@ -63,7 +64,8 @@ src/task_orchard/
                        catalogue tool registered in a loop (done)
   api/               REST routes (Phase 6)
   skills/              one markdown file per skill: overview, triage, what-now,
-                       subdivide, complete-and-reflect
+                       subdivide, complete-and-reflect, onboarding,
+                       plan-time-block, housekeeping, weekly-review
   devtools/seed.py     demo data, addressed by handle
 tests/
   conftest.py          fixtures: orchard, clock, seeded, session

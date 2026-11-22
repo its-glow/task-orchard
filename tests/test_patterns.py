@@ -183,3 +183,9 @@ def test_find_with_no_query_lists_most_recently_used_first(orchard: Orchard) -> 
     with pytest.raises(Invalid):
         orchard.find_patterns(limit=11)
     assert unused
+
+
+def test_a_description_is_at_most_600_characters(orchard: Orchard) -> None:
+    orchard.save_pattern(name="Short", description="d" * 600)
+    with pytest.raises(Invalid):
+        orchard.save_pattern(name="Long", description="d" * 601)

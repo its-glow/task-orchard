@@ -68,7 +68,11 @@ def _register_prompt(mcp: FastMCP, guide: Guide) -> None:
 
 def build_server(orchard: Orchard, settings: Settings | None = None) -> FastMCP:
     instructions = INSTRUCTIONS
-    if settings is not None and not settings.timezone_detected:
+    if (
+        settings is not None
+        and not settings.timezone_detected
+        and orchard.stored_timezone() is None
+    ):
         instructions += "\n" + TIMEZONE_WARNING + "\n"
     mcp = FastMCP(name="Task Orchard", instructions=instructions)
     guides = load_guides()

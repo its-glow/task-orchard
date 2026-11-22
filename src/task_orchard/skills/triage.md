@@ -23,8 +23,8 @@ Goal: every task in the inbox gets its fields filled in and leaves the inbox, wi
 5. **Write each task** with one `update_task` call. This also takes it out of the inbox.
    - Mark where each value came from in `sources`: `"user"` for what the user said, `"pattern"` for what you took from a pattern. Leave your own guesses out of `sources`; they are recorded as guesses.
    - If the result has `skipped`, the user had set those fields before. Leave them unless the user has just asked for the change.
-6. **Duplicates.** If `capture_tasks` reported `possible_duplicates`, or two inbox tasks look like the same thing, say so and ask whether to keep both.
-7. **Recurring intent**: convert the task with `recurrence` in the same `update_task` call.
+6. **Duplicates.** If `capture_tasks` reported `possible_duplicates`, or two tasks look like the same thing, ask whether to keep both.
+7. **Recurring intent.** First `search_tasks` for its key word ("run" for "running twice a week"). If a recurring task already covers it, treat it as a duplicate (step 6). Otherwise convert it with `recurrence` in the same `update_task` call.
    - Calendar-bound ("every Friday by 5"): `{"mode": "scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", "due_time": "17:00"}`. Last day of the month is `BYMONTHDAY=-1`.
    - Looser ("twice a week"): `{"mode": "flexible", "cadence": "<their words>"}`, with `gap_days` for a natural rest between times.
    - No deadline or `achievable`; put an existing deadline in `clear`.

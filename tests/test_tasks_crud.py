@@ -129,6 +129,27 @@ def test_enum_names_are_matched_leniently(orchard: Orchard) -> None:
     assert "low, normal, high, critical" in caught.value.hint
 
 
+def test_sources_naming_an_untracked_field_are_ignored(orchard: Orchard) -> None:
+    """A model marking the user's own recurrence or title as "user" is right in
+    spirit; those fields carry no source, so the entry is dropped (SPEC 4.5)."""
+    task = orchard.create_task(
+        title="Run",
+        recurrence={"mode": "flexible", "cadence": "twice a week", "gap_days": 3},
+        sources={"recurrence": "user", "title": "user", "motive": "user"},
+        motive="want",
+    )["task"]
+    assert task["fields"]["motive"]["source"] == "user"
+    plain = orchard.create_task("Stretch")["task"]["id"]
+    orchard.update_task(
+        plain,
+        recurrence={"mode": "flexible", "cadence": "most days", "gap_days": 1},
+        sources={"recurrence": "user", "notes": "user"},
+    )
+    with pytest.raises(Invalid) as caught:
+        orchard.create_task(title="T", estimate_minutes=5, sources={"estimate": "user"})
+    assert "estimate_minutes" in caught.value.hint
+
+
 @pytest.mark.parametrize(
     "kw",
     [
@@ -479,3 +500,12 @@ def test_events_written_by_create_are_typed(orchard: Orchard) -> None:
     make(orchard, "T")
     with orchard.tx() as tx:
         assert tx.session.scalar(sa.select(Event.type)) is EventType.CREATED
+
+
+def test_conditions_are_short_and_few(orchard: Orchard) -> None:
+    five = ["a", "b", "c", "d", "e"]
+    assert len(orchard.create_task("T", conditions=five)["task"]["conditions"]) == 5
+    with pytest.raises(Invalid):
+        orchard.create_task("T", conditions=[*five, "f"])
+    with pytest.raises(Invalid):
+        orchard.create_task("T", conditions=["x" * 31])
