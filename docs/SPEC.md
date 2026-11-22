@@ -2,7 +2,7 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation) and 2A (the app) are done and tested; Phase 2A's two scenarios pass on Claude Haiku 5.5. Phases 3–6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app) and 3 (leading edge and completion) are done and tested; the four scenarios of Phases 2A and 3 pass on Claude Haiku 5.5. Phases 4–6 are specified here and not yet built.
 
 **How it is used.** Task Orchard has its own assistant, called the app: a loop that talks to a model and calls the operations of section 8 directly (section 10.2). The app is the primary way in, and behaviour is designed and tested against it. Other assistants reach the same operations over MCP, and programs over REST; both are adapters built out in Phase 6 (section 12).
 
@@ -434,16 +434,16 @@ Written only through `core.events.record()`, with `at = tx.now`. The table below
 | `capture_tasks` | `created` (each new task) `{via: "capture"}` |
 | `create_task` | `created` (new task) `{via: "create", parent_id}`; `linked` per link; `updated` (parent) when its `achievable` was flipped (section 8.2); `updated` (recurring parent) `{changes: {snooze_until}}` when creating an instance under a sleeping flexible task woke it (section 7.2) |
 | `update_task` | `updated` (task) `{changes: {field: {from, to, source?}}}`, where `source` is present for tracked fields and is the source the value was written with, and a deadline's value is `{at, firmness}`; `description` and `notes` are logged by length instead, as `{from_chars, to_chars}`, so long text is not copied into the log; plus `paused` or `resumed` (task) when a scheduled task's own snooze is set or cleared; plus `conflict` (task) `{field, kept, proposed, source}` per protected field skipped with source `pattern` or `evidence`; plus `updated` (new parent) when a move flipped its `achievable` |
-| `subdivide_task` | `created` (each child) `{via: "subdivide", parent_id}`; `linked` per ordering link; `subdivided` (parent) `{children: [ids]}` |
+| `subdivide_task` | `created` (each child) `{via: "subdivide", parent_id}`; `linked` per ordering link; `subdivided` (parent) `{children: [ids]}`; `updated` (parent) when its `achievable` was flipped (section 8.2) |
 | `link_tasks` | `linked` (blocked task) `{blocker_id, blocked_id}` |
 | `unlink_tasks` | `unlinked` (blocked task) `{blocker_id, blocked_id}` |
 | `start_task` | `started` (task) `{}` |
-| `complete_task` | `completed` (the task that became done) `{actual_minutes, completed_at, recurring_id?, sleeping_until?}`; preceded by `created` `{via: "complete"}` when the task was created by this call, or by `spawned` when a scheduled task's next instance was created by this call; preceded by `dropped` `{reason: "parent completed", cascade_from}` for each open child dropped; plus `updated` (parent) when a task created by this call under `parent_id` flipped the parent's `achievable` (section 8.2); plus `pattern_saved` when `new_pattern` created one |
-| `snooze_task` | `snoozed` (task) `{until, reason, previous}`; or `woken` (task) `{previous}`; for a scheduled recurring task `paused` `{until, reason}` or `resumed` `{skipped_until}` instead |
+| `complete_task` | `completed` (the task that became done) `{actual_minutes?, completed_at, pattern_id?, recurring_id?, sleeping_until?}`, where `pattern_id` is present when the call filed the task under a pattern; preceded by `created` `{via: "complete", parent_id}` when the task was created by this call, or by `spawned` when a scheduled task's next instance was created by this call; preceded by `dropped` `{reason: "parent completed", cascade_from}` for each open child dropped; plus `updated` (parent) when a task created by this call under `parent_id` flipped the parent's `achievable` (section 8.2); plus `pattern_saved` when `new_pattern` created one |
+| `snooze_task` | `snoozed` (task) `{until, reason?, previous?}`; or `woken` (task) `{previous}`, and nothing when waking a task that has no snooze; for a scheduled recurring task `paused` `{until, reason}` or `resumed` `{skipped_until}` instead |
 | `drop_tasks` | `dropped` (each task, including descendants) `{reason, cascade_from?}` |
 | `reopen_task` | `reopened` (task) `{was, completion?}` where `completion` holds the deleted completion row's fields |
 | `merge_tasks` | `merged` (source) `{into, moved_children, moved_links, filled}`; `updated` (target) `{changes}` if any of its fields changed |
-| `save_pattern` | `pattern_saved` (no task) `{pattern_id, created?, changes}`; or `patterns_merged` (no task) `{from: {id, name}, into, tasks_moved}` |
+| `save_pattern` | `patterns_merged` (no task) `{from: {id, name}, into, tasks_moved}` when merging; then `pattern_saved` (no task) `{pattern_id, created?, changes}` when the pattern was created or a field changed. `changes` holds `name` and `learned` as `{from, to}` and `description` by length as `{from_chars, to_chars}` |
 | `write_profile_note` | `profile_saved` (no task) `{topic, deleted?}` (the text is not copied into the log) |
 | `roll_forward` | `spawned` (instance) `{recurring_id, occurrence_at}`; `missed` (instance) `{recurring_id, replaced_by}`, preceded by `dropped` `{reason: "instance missed", cascade_from}` for each of its open descendants; `resumed` (recurring) `{skipped_until}`; `dropped` (recurring) `{reason: "schedule ended"}` when its rule has no slots left (section 7.1) |
 | `set_timezone` | `settings_saved` (no task) `{timezone: {from, to}}` |
@@ -689,7 +689,7 @@ Break a task into children in one atomic call.
 - `sequential?`: default `false`. When `true`, each child is blocked by the one before it, and `after` must not be used.
 - `sources?`: applies to every child.
 
-Effects: children are created triaged; the parent's `achievable` becomes `no`; ordering links are created and cycle-checked.
+Effects: children are created triaged; the parent's `achievable` becomes `no`; ordering links are created and cycle-checked. A closed parent is `parent_closed`. A parent that already has children may be subdivided again; the new children are added alongside. A child with a key not listed above is `invalid`, and every error about a child names its position (`Child 2: ...`).
 
 Returns `{parent: row, children: [rows]}`.
 
@@ -739,7 +739,7 @@ Returns `{completed: row}` plus, when they apply:
 - `parent_check`: when the parent is a plain task, is open and now has no open children: `{parent: row, children: [{title, status}]}` (up to 10, most recently closed first).
 - `recurrence_check`: section 7.2.
 - `next_slot`: a stamp, for a scheduled instance.
-- `unblocked`: rows of tasks for which this was the last open effective blocker.
+- `unblocked`: rows of tasks for which this was the last open effective blocker: every open task this call's closed tasks (the target and any children it dropped) effectively blocked, that was blocked before the call and is not after it. Descendants freed through a blocked parent are included. At most 10 rows, in id order, plus `unblocked_more: n`.
 
 ### 8.8 `snooze_task` — Phase 3
 
@@ -748,7 +748,8 @@ The user is putting something off, or a recurring task is being paused.
 - `task_id`: must be open.
 - `until?` (section 3.2) or `days?` (a whole number, 0 or more, ending at the start of a day as in section 3.4). Exactly one.
 - `reason?`.
-- If the resulting time is not after `now` (including `days: 0`), the snooze is cleared instead: this is how to wake a task.
+- If the resulting time is not after `now` (including `days: 0`), the snooze is cleared instead: this is how to wake a task. Waking a task that has no snooze changes nothing and writes no event.
+- `triaged` is left as it is, here and in `start_task`.
 - Events per section 6.4. Returns `{task}`.
 
 ### 8.9 `drop_tasks` — Phase 3
@@ -758,7 +759,8 @@ Close tasks that will not be done.
 - `task_ids`: 1 to 50. `reason`: required, non-blank.
 - Each open task is set to `dropped` with `closed_at = now`, and so is every open descendant.
 - An id that is already closed is not an error; it is listed in `skipped`.
-- Returns `{dropped: [{id, title}], also_dropped: [{id, title}], skipped?, parent_checks?, unblocked?}`. `unblocked` is as in `complete_task`: rows of tasks for which a dropped task was the last open effective blocker.
+- An id listed twice counts once. A listed task that is also a descendant of another listed task is dropped in its own right and appears in `dropped`, not `also_dropped`.
+- Returns `{dropped: [{id, title}], also_dropped: [{id, title}], skipped?: [{id, title, status}], parent_checks?, unblocked?, unblocked_more?}`. `dropped` is always present. `parent_checks` is a list of the `parent_check` objects of `complete_task`, one per open plain parent left with no open children, leaving out parents dropped in the same call. `unblocked` is as in `complete_task`: rows of tasks for which a dropped task was the last open effective blocker.
 
 ### 8.10 `reopen_task` — Phase 3
 
@@ -844,14 +846,15 @@ Section 6.6. `days?`: 1 to 31, default 1.
 
 ### 8.17 `find_patterns`, `save_pattern` — Phase 3 (digest statistics in Phase 5)
 
-**`find_patterns(query?, limit?)`**: full-text search over name, description and learned, with the same query handling as `search_tasks`. With no query: most recently used first (by latest member completion). `limit` 1 to 10, default 5. Returns `{patterns: [digests]}`.
+**`find_patterns(query?, limit?)`**: full-text search over name, description and learned, with the same query handling as `search_tasks`. With no query: most recently used first (by latest member completion), then patterns with no completed member, newest first. `limit` 1 to 10, default 5. Returns `{patterns: [digests]}`.
 
 **`save_pattern(pattern_id?, name?, description?, learned?, merge_from_id?)`**
 
 - Without `pattern_id`: creates a pattern; `name` is required. If the name exists (ignoring case), `invalid` with the existing id in `details`.
 - With `pattern_id`: changes the fields given.
 - `learned` is at most 600 characters (`invalid` if longer, with the hint to rewrite it shorter, not to append).
-- `merge_from_id`: moves that pattern's tasks to `pattern_id` and deletes it. The agent supplies the combined `learned` in the same call.
+- `merge_from_id`: moves that pattern's tasks to `pattern_id` and deletes it. The agent supplies the combined `learned` in the same call. The merge happens before any rename, so the surviving pattern may take the merged one's name. Merging a pattern into itself, or `merge_from_id` without `pattern_id`, is `invalid`.
+- Blank `description` or `learned` clears it. Names are trimmed with spacing collapsed, and are at most 200 characters.
 - Returns `{pattern: digest}`.
 
 In Phase 3 a digest contains the stored fields and the status counts only; the remaining statistics arrive in Phase 5.
@@ -1160,6 +1163,10 @@ The tool functions moved out of `mcp/server.py` into the catalogue unchanged, an
 
 Build: `subdivide_task`, `start_task`, `complete_task` (without recurrence), `snooze_task`, `drop_tasks`, `reopen_task`, per-task counts (5.6), `find_patterns`, `save_pattern` (stored fields and counts). Skills: `subdivide`, `complete-and-reflect`.
 
+The Phase 1 rule for recurring tasks still holds, in its simplest form: `start_task`, `complete_task`, `snooze_task`, `drop_tasks` and `reopen_task` raise `unsupported` when the target is a recurring task, and `reopen_task` also when it is an instance (the instance cap arrives with recurrence). Phase 4 adds every recurrence path at once. An open instance is otherwise a plain task: it can be completed, snoozed or dropped, with no `next_slot` or `recurrence_check`. No schema change was needed.
+
+Done. The scenarios `subdivide` (strategic tier) and `complete-and-reflect` (basic) pass on Haiku 5.5, as do the two from Phase 2A.
+
 | Test module | Must prove |
 |---|---|
 | `test_subdivide.py` | Atomicity (one bad child creates none); `sequential`; `after` by position; cycle rejection; events. |
@@ -1274,4 +1281,10 @@ Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PL
 | Scenarios | Run through the app's loop by `pytest -m scenario`, from Phase 2A, in place of manual scripts run by hand in an MCP host. They assert on tool calls and end state, are excluded from the normal run, and are never part of acceptance. |
 | REST views | REST routes do not return the model-facing rows of section 4, as first planned. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
 | Unattended runs | In Phase 6, housekeeping and the morning and evening skills are runs of the app started by the operating system's scheduler. Task Orchard still has no background process of its own. An agent platform over MCP remains possible but is no longer the plan. |
+| Phase 3 and recurrence | Every write on a recurring target stays `unsupported` until Phase 4, including starting and snoozing a flexible task, which section 8.6 and 7.2 would allow on their own. A half-built recurrence path is more work than it saves while the phases move quickly; Phase 4 adds them together. |
+| Achievable flip in subdivide | `subdivide_task` logs the parent's flip to `achievable: no` with `updated`, like every other way of adding a child. The first draft of 6.4 left it out for this one route. |
+| Pattern at completion | The `completed` event carries `pattern_id` when the call filed the task, so filing at completion is logged like any other change (ground rule 5). |
+| `unblocked` | Includes descendants freed through a blocked parent (the venue as well as the offsite), and is capped at 10 rows with `unblocked_more`, so a large project cannot blow the response budget. |
+| `drop_tasks` | `parent_checks` reuses `complete_task`'s `parent_check` shape as a list. A listed task is reported in `dropped` even when another listed task is its ancestor. |
+| Pattern merges | A merge writes `patterns_merged` and, when the same call changes fields, also `pattern_saved`, so each event means one thing. The merge happens before a rename, so the survivor can take the merged pattern's name. |
 | Commands | `task-orchard mcp` names the stdio MCP server from Phase 2A. The bare command and `serve` keep running it until Phase 6, when `serve` becomes the HTTP service; that change is confirmed with the user first. |

@@ -16,13 +16,21 @@ BUILT = [
     "capture_tasks",
     "create_task",
     "update_task",
+    "subdivide_task",
     "link_tasks",
     "unlink_tasks",
+    "start_task",
+    "complete_task",
+    "snooze_task",
+    "drop_tasks",
+    "reopen_task",
     "get_task",
     "get_tree",
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "find_patterns",
+    "save_pattern",
     "read_profile",
     "write_profile_note",
 ]
@@ -32,6 +40,7 @@ READ_ONLY = {
     "search_tasks",
     "get_candidates",
     "get_critical",
+    "find_patterns",
     "read_profile",
 }
 
@@ -131,7 +140,7 @@ def test_an_orchard_error_becomes_the_section_4_2_json(orchard: Orchard, tools: 
 
 
 def test_an_unknown_tool_is_invalid_and_lists_the_names(tools: list[Tool]) -> None:
-    outcome = call_tool(tools, "complete_task", {"task_id": 1})
+    outcome = call_tool(tools, "merge_tasks", {"source_id": 1, "into_id": 2})
     assert outcome.is_error
     assert outcome.payload["error"] == "invalid"
     assert "capture_tasks" in outcome.payload["hint"]
@@ -188,3 +197,49 @@ def test_a_bug_propagates(orchard: Orchard, tools: list[Tool], monkeypatch) -> N
     monkeypatch.setattr(orchard, "read_profile", broken)
     with pytest.raises(RuntimeError):
         call_tool(tools, "read_profile", {})
+
+
+# --- Phase 3 tools, once each through call_tool (SPEC 11) ---
+
+
+def test_phase_3_tools_round_trip(
+    orchard: Orchard, seeded: dict[str, int], tools: list[Tool]
+) -> None:
+    def ok(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        outcome = call_tool(tools, name, arguments)
+        assert not outcome.is_error, (name, outcome.payload)
+        assert "now" in outcome.payload
+        return outcome.payload
+
+    parent = ok("create_task", {"title": "Plan the party"})["task"]["id"]
+    children = ok(
+        "subdivide_task",
+        {
+            "parent_id": parent,
+            "children": [{"title": "Invite", "achievable": "Yes"}, {"title": "Cake", "after": [1]}],
+        },
+    )["children"]
+    invite, cake = (c["id"] for c in children)
+    assert ok("start_task", {"task_id": invite})["starts"] == 1
+    assert ok("snooze_task", {"task_id": cake, "days": "2"})["task"]["deferred"] == 1
+    done = ok(
+        "complete_task",
+        {"task_id": invite, "actual_minutes": "15", "felt_drain": "Low", "new_pattern": "Parties"},
+    )
+    assert [r["id"] for r in done["unblocked"]] == [cake]
+    assert ok("reopen_task", {"task_id": invite})["task"]["id"] == invite
+    assert ok("drop_tasks", {"task_ids": [parent], "reason": "cancelled"})["also_dropped"]
+    found = ok("find_patterns", {"query": "parties"})["patterns"]
+    assert [p["name"] for p in found] == ["Parties"]
+    saved = ok("save_pattern", {"pattern_id": found[0]["id"], "learned": "Plan a week ahead."})
+    assert saved["pattern"]["learned"] == "Plan a week ahead."
+
+
+def test_phase_3_errors_round_trip(tools: list[Tool]) -> None:
+    outcome = call_tool(tools, "complete_task", {})
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+    outcome = call_tool(tools, "snooze_task", {"task_id": 1, "days": 1.5})
+    assert outcome.is_error and outcome.payload["error"] == "invalid"
+    assert "days" in outcome.payload["hint"]
+    outcome = call_tool(tools, "reopen_task", {"task_id": 1})
+    assert outcome.is_error and outcome.payload["error"] == "not_found"

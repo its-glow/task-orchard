@@ -62,6 +62,23 @@ class CaptureItem(TypedDict):
     notes: NotRequired[str]
 
 
+class ChildItem(TypedDict):
+    title: Annotated[str, Field(description='e.g. "Draft the outline".')]
+    description: NotRequired[str]
+    estimate_minutes: NotRequired[int]
+    achievable: NotRequired[AchievableName]
+    priority: NotRequired[PriorityName]
+    activation: NotRequired[LevelName]
+    drain: NotRequired[LevelName]
+    conditions: NotRequired[list[str]]
+    after: NotRequired[
+        Annotated[
+            list[int],
+            Field(description="Positions (from 1) of children in this call to finish first."),
+        ]
+    ]
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
@@ -192,6 +209,28 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         )  # fmt: skip
 
     @_tool
+    def subdivide_task(
+        parent_id: Annotated[int, _p("The task to break down, e.g. 12.")],
+        children: Annotated[
+            list[ChildItem],
+            _p('1 to 12 steps, e.g. [{"title": "Pick a date"}, {"title": "Book", "after": [1]}].'),
+        ],
+        sequential: Annotated[bool, _p("True if each step waits for the one before.")] = False,
+        sources: Annotated[
+            dict[str, SourceName] | None,
+            _p('Applies to every child, e.g. {"estimate_minutes": "user"}.'),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Break a task into its next layer of steps, in one call.
+
+        Use when a task is not achievable as it stands. Break down one layer
+        only; a step that is still vague can be broken down later. Use
+        sequential or after only where the order is real. The parent becomes
+        not achievable.
+        """
+        return orchard.subdivide_task(parent_id, children, sequential, sources)
+
+    @_tool
     def link_tasks(
         blocker_id: Annotated[int, _p("Must be finished first, e.g. 7.")],
         blocked_id: Annotated[int, _p("Waits for the blocker, e.g. 9.")],
@@ -210,6 +249,89 @@ def catalogue(orchard: Orchard) -> list[Tool]:
     ) -> dict[str, Any]:
         """Remove a "must finish first" link. Works on closed tasks too."""
         return orchard.unlink_tasks(blocker_id, blocked_id)
+
+    @_tool
+    def start_task(
+        task_id: Annotated[int, _p("The task being started, e.g. 12.")],
+    ) -> dict[str, Any]:
+        """Record that the user is starting work on a task now.
+
+        Starts without a finish are a signal that something is hard to start,
+        so record each one. It does not change the task.
+        """
+        return orchard.start_task(task_id)
+
+    @_tool
+    def complete_task(
+        task_id: Annotated[int | None, _p("The task that was done, e.g. 12.")] = None,
+        title: Annotated[
+            str | None, _p('Instead of task_id, for work never tracked: "Fixed the gate".')
+        ] = None,
+        parent_id: Annotated[int | None, _p("With title: file it under this task, e.g. 4.")] = None,
+        motive: Annotated[MotiveName | None, _p('With title: e.g. "must".')] = None,
+        description: Annotated[str | None, _p("With title: what was done.")] = None,
+        completed_at: Annotated[str | None, _p(WHEN + " Omit for now.")] = None,
+        actual_minutes: Annotated[int | None, _p("How long it took, e.g. 40.")] = None,
+        felt_activation: Annotated[LevelName | None, _p('How hard to start: "high".')] = None,
+        felt_drain: Annotated[LevelName | None, _p('How tiring it was: "low".')] = None,
+        reflection: Annotated[str | None, _p("The user's words on how it went.")] = None,
+        pattern_id: Annotated[int | None, _p("File under this kind of work, e.g. 3.")] = None,
+        new_pattern: Annotated[
+            str | None, _p('Or under a new kind of work: "Phone calls to book things".')
+        ] = None,
+        drop_open_children: Annotated[
+            bool, _p("True to drop unfinished steps under it as well.")
+        ] = False,
+    ) -> dict[str, Any]:
+        """Record that something was done, with how it went.
+
+        Pass task_id for an existing task, or title for work that was never a
+        task. Fill actual_minutes and the felt values from the user's words.
+        The result may carry parent_check (the parent has nothing left open)
+        and unblocked (tasks now free to start).
+        """
+        return orchard.complete_task(
+            task_id, title=title, parent_id=parent_id, motive=motive,
+            description=description, completed_at=completed_at,
+            actual_minutes=actual_minutes, felt_activation=felt_activation,
+            felt_drain=felt_drain, reflection=reflection, pattern_id=pattern_id,
+            new_pattern=new_pattern, drop_open_children=drop_open_children,
+        )  # fmt: skip
+
+    @_tool
+    def snooze_task(
+        task_id: Annotated[int, _p("e.g. 12.")],
+        until: Annotated[str | None, _p(WHEN + " A bare day means its start.")] = None,
+        days: Annotated[int | None, _p("Or whole days from now, e.g. 3. 0 wakes it.")] = None,
+        reason: Annotated[str | None, _p('Why, in the user\'s words: "not today".')] = None,
+    ) -> dict[str, Any]:
+        """The user is putting a task off: hide it until a time.
+
+        Pass until or days. Each snooze is counted as a deferral. A time that
+        is not in the future (days=0) wakes the task instead.
+        """
+        return orchard.snooze_task(task_id, until, days, reason)
+
+    @_tool
+    def drop_tasks(
+        task_ids: Annotated[list[int], _p("1 to 50 tasks, e.g. [12, 15].")],
+        reason: Annotated[str, _p('Why, e.g. "no longer needed".')],
+    ) -> dict[str, Any]:
+        """Close tasks that will not be done, with everything under them.
+
+        Only when the user decided it. Already closed tasks are skipped. The
+        result lists what else was dropped, parents with nothing left open,
+        and tasks now free to start.
+        """
+        return orchard.drop_tasks(task_ids, reason)
+
+    @_tool
+    def reopen_task(task_id: Annotated[int, _p("e.g. 12.")]) -> dict[str, Any]:
+        """Undo a completion or a drop: the task is open again.
+
+        Its completion record is removed. Reopen a closed parent first.
+        """
+        return orchard.reopen_task(task_id)
 
     @_read_only
     def get_task(task_id: Annotated[int, _p("e.g. 12.")]) -> dict[str, Any]:
@@ -289,6 +411,37 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         due soon, or critical, each with what stands in its way.
         """
         return orchard.get_critical(horizon_days)
+
+    @_read_only
+    def find_patterns(
+        query: Annotated[str | None, _p('Words, e.g. "phone call". Omit for recent.')] = None,
+        limit: Annotated[int, _p("1 to 10, e.g. 5.")] = 5,
+    ) -> dict[str, Any]:
+        """Find kinds of work the user has done before, with what was learned.
+
+        Use when filling in a task's fields or filing a completion. With no
+        query, lists the most recently used.
+        """
+        return orchard.find_patterns(query, limit)
+
+    @_tool
+    def save_pattern(
+        pattern_id: Annotated[int | None, _p("Pattern to change, e.g. 3. Omit to create.")] = None,
+        name: Annotated[str | None, _p('e.g. "Phone calls to book things".')] = None,
+        description: Annotated[str | None, _p("What counts as this kind of work.")] = None,
+        learned: Annotated[
+            str | None, _p('The whole note, at most 600 characters: "Takes twice the estimate."')
+        ] = None,
+        merge_from_id: Annotated[
+            int | None, _p("Fold this pattern into pattern_id, e.g. 5.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """Create or change a kind of work, or merge two.
+
+        learned replaces the whole note: rewrite it to fit, never append. When
+        merging, pass the combined learned note in the same call.
+        """
+        return orchard.save_pattern(pattern_id, name, description, learned, merge_from_id)
 
     @_read_only
     def read_profile() -> dict[str, Any]:

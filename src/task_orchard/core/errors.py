@@ -84,6 +84,29 @@ class NotOpen(OrchardError):
         )
 
 
+class AlreadyOpen(OrchardError):
+    def __init__(self, task_id: int) -> None:
+        super().__init__(
+            ErrorCode.ALREADY_OPEN,
+            f"Task {task_id} is already open.",
+            hint="Nothing to reopen. Use update_task to change it.",
+            details={"task_id": task_id},
+        )
+
+
+class HasOpenChildren(OrchardError):
+    def __init__(self, task_id: int, children: list[dict[str, Any]]) -> None:
+        super().__init__(
+            ErrorCode.HAS_OPEN_CHILDREN,
+            f"Task {task_id} still has open children, so it cannot be completed.",
+            hint=(
+                "Complete or drop the children first. If the user says the whole task is "
+                "done, repeat the call with drop_open_children=true."
+            ),
+            details={"task_id": task_id, "children": children},
+        )
+
+
 class ParentClosed(OrchardError):
     def __init__(self, parent_id: int, status: str) -> None:
         super().__init__(

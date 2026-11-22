@@ -13,14 +13,14 @@ except the ones a caller names as always present.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
 
-from task_orchard.core import timefmt
+from task_orchard.core import history, timefmt
 from task_orchard.core.enums import TRACKED_FIELDS, Achievable, EventType, Firmness, Status
-from task_orchard.db.models import Event, Task
+from task_orchard.db.models import Event, Pattern, Task
 
 if TYPE_CHECKING:
     from zoneinfo import ZoneInfo
@@ -35,6 +35,8 @@ DETAIL_CHILDREN = 20
 DETAIL_EVENTS = 10
 DETAIL_NOTES_CHARS = 2000
 EVENT_NOTE_CHARS = 120
+PATTERN_HINT_CHARS = 120
+TOUCHED_AFTER = timedelta(days=1)
 ELLIPSIS = "…"
 
 
@@ -172,12 +174,39 @@ def task_row(
         row["blocked_by_more"] = max(0, len(found) - blockers)
     row["unblocks"] = snap.unblocks(task)
     row["conditions"] = list(task.conditions or [])
+    counts = snap.counts(task)
+    if not task.is_recurring:
+        last = snap.last_touched(task)
+        if now - last > TOUCHED_AFTER:
+            row["touched"] = timefmt.relative(last, now)
+    row["deferred"] = counts.deferred
+    row["starts"] = counts.starts
     if task.is_recurring:
         row["recurring"] = compact(
             {"mode": task.recur_mode.value, "cadence": task.cadence, "gap_days": task.gap_days}
         )
+    if task.pattern_id is not None:
+        found = snap.pattern(task.pattern_id)
+        row["pattern"] = compact(
+            {
+                "id": found.id,
+                "name": found.name,
+                "hint": truncate(found.learned, PATTERN_HINT_CHARS) if found.learned else None,
+            }
+        )
     keep = ("id", "title", "status") if always_status else ("id", "title")
     return compact(row, keep=keep)
+
+
+# --- Pattern digests (6.1) ---
+
+
+def pattern_digests(session: Any, patterns: list[Pattern]) -> list[dict[str, Any]]:
+    return [compact(d, keep=("id", "name")) for d in history.pattern_digests(session, patterns)]
+
+
+def pattern_digest(session: Any, pattern: Pattern) -> dict[str, Any]:
+    return pattern_digests(session, [pattern])[0]
 
 
 # --- The detail (4.4) ---
@@ -243,6 +272,8 @@ def event_note(event: Event) -> str:
     elif event.type in (EventType.LINKED, EventType.UNLINKED):
         verb = "blocked by" if event.type is EventType.LINKED else "no longer blocked by"
         text = f"{verb} #{p.get('blocker_id')}"
+    elif event.type is EventType.REOPENED:
+        text = f"was {p.get('was', '?')}"
     elif event.type is EventType.CONFLICT:
         text = (
             f"kept {p.get('field')} = {_brief(p.get('kept'))}; "
@@ -311,8 +342,7 @@ def task_detail(snap: Snapshot, task: Task, tz: ZoneInfo) -> dict[str, Any]:
     extra["created"] = timefmt.stamp(task.created_at, tz, now)
     if task.closed_at is not None:
         extra["closed"] = timefmt.stamp(task.closed_at, tz, now)
-    if task.pattern is not None:
-        # The full digest arrives in Phase 3 (SPEC 6.1).
-        extra["pattern"] = {"id": task.pattern.id, "name": task.pattern.name}
+    if task.pattern_id is not None:
+        extra["pattern"] = pattern_digest(snap.session, snap.pattern(task.pattern_id))
 
     return compact({**detail, **extra}, keep=("id", "title"))

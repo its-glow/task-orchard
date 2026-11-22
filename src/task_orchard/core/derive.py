@@ -22,9 +22,10 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from task_orchard.core import history
 from task_orchard.core.enums import Firmness, Motive, Priority, RecurMode, Status
 from task_orchard.core.shortlist import AT_RISK_MIN_HOURS, AT_RISK_WORK_FACTOR
-from task_orchard.db.models import Task, TaskBlock
+from task_orchard.db.models import Pattern, Task, TaskBlock
 
 PARENT = "parent"
 BLOCKS = "blocks"
@@ -74,6 +75,8 @@ class Snapshot:
         self._priority: dict[int, Effective | None] = {}
         self._due: dict[tuple[int, bool], Effective | None] = {}
         self._remaining: dict[int, int] = {}
+        self._counts: dict[int, history.Counts] | None = None
+        self._patterns: dict[int, Pattern] | None = None
 
     # --- Access ---
 
@@ -105,6 +108,22 @@ class Snapshot:
 
     def is_open(self, task_id: int) -> bool:
         return task_id in self.open_ids
+
+    def counts(self, task: Task) -> history.Counts:
+        """Per-task counts (SPEC 5.6), loaded for every open task at once."""
+        if self._counts is None:
+            self._counts = history.task_counts(self.session, self.open_ids)
+        if task.id not in self._counts:
+            self._counts.update(history.task_counts(self.session, [task.id]))
+        return self._counts[task.id]
+
+    def last_touched(self, task: Task) -> datetime:
+        return self.counts(task).last_touched or task.created_at
+
+    def pattern(self, pattern_id: int) -> Pattern:
+        if self._patterns is None:
+            self._patterns = {p.id: p for p in self.session.scalars(sa.select(Pattern))}
+        return self._patterns[pattern_id]
 
     # --- Predicates (SPEC 5.3) ---
 

@@ -48,7 +48,7 @@ def counts(orchard: Orchard) -> tuple[int, int]:
 
 
 def close(orchard: Orchard, task_id: int, status: Status = Status.DONE) -> None:
-    """Close a task directly; the Phase 3 tools do not exist yet."""
+    """Close a task directly, without the events a Phase 3 tool would write."""
     with orchard.tx() as tx:
         task = tx.session.get(Task, task_id)
         task.status, task.closed_at = status, tx.now

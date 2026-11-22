@@ -4,7 +4,7 @@ A task and time management service for one person, with its own AI assistant.
 
 You cultivate trees of tasks: big vague efforts, one-line reminders, recurring chores, things you want to do more of. In return the assistant helps you decide what to work on when you need it, using facts the server computes and what it has learned about how your work actually goes.
 
-**Status:** phases 0–2A of [`docs/SPEC.md`](docs/SPEC.md) are built. You can talk to Task Orchard's own assistant in the terminal, or reach the same tools from another assistant over MCP. You can capture, create, organise, link and search tasks, ask for a shortlist of what to do now or for what is urgent, and keep a profile. Completing, snoozing, dropping and breaking tasks down arrive in phase 3, and recurrence in phase 4 (see [What works yet](#what-works-yet)).
+**Status:** phases 0–3 of [`docs/SPEC.md`](docs/SPEC.md) are built. You can talk to Task Orchard's own assistant in the terminal, or reach the same tools from another assistant over MCP. You can capture, create, organise, link and search tasks, ask for a shortlist of what to do now or for what is urgent, break tasks down, start, complete, snooze, drop and reopen them, file work under patterns, and keep a profile. Recurrence arrives in phase 4 (see [What works yet](#what-works-yet)).
 
 ## How you use it
 
@@ -141,10 +141,13 @@ With the demo database, start `task-orchard chat`, try these, and watch the tool
 | "The bike light is for Saturday's ride." | `update_task` with a deadline, recorded as yours (`sources: {"deadline": "user"}`). |
 | "Show me my projects." | `get_tree`. |
 | "Remember I'm not a morning person." | `write_profile_note`. |
+| "Filing my taxes feels like a huge blob. Break it down." | The `subdivide` guide: one `subdivide_task` call with two to seven steps, ordered only where the order is real. |
+| "I finally called the dentist. Ten minutes, but I dreaded it all morning." | The `complete-and-reflect` guide: `complete_task` on the dentist task with `actual_minutes: 10` and `felt_activation: "high"`, filed under the phone-calls pattern. |
+| "Not now" to an offered option | `snooze_task`; the task's `deferred` count goes up. |
 
 Things worth noticing: whether the assistant uses relative times ("in 2 days") rather than working out dates, whether it follows the guides when triaging or planning, and whether error messages lead it to a correct retry. Try the harder rows on both tiers.
 
-Two of these rows also run as automated scenarios against a real model: `uv run pytest -m scenario -s`. They are left out of the normal test run because they cost money.
+Four of these rows also run as automated scenarios against a real model: `uv run pytest -m scenario -s`. They are left out of the normal test run because they cost money.
 
 ## What works yet
 
@@ -153,9 +156,9 @@ Two of these rows also run as automated scenarios against a real model: `uv run 
 | 1 | `capture_tasks`, `create_task`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task`, `get_tree`, `search_tasks` | Built |
 | 2 | `get_candidates`, `get_critical`, `read_profile`, `write_profile_note`; guides `triage`, `what-now` | Built |
 | 2A | The app: `task-orchard chat` and `ask`, two model tiers, one shared tool catalogue, model scenarios | Built |
-| 3 | `complete_task`, `snooze_task`, `drop_tasks`, `reopen_task`, `start_task`, `subdivide_task`, patterns | Not yet |
+| 3 | `subdivide_task`, `start_task`, `complete_task`, `snooze_task`, `drop_tasks`, `reopen_task`, `find_patterns`, `save_pattern`; guides `subdivide`, `complete-and-reflect` | Built |
 | 4 | Recurrence: creating recurring tasks, spawning occurrences | Not yet |
 | 5 | Review queue, activity, merging, `set_timezone`, onboarding and review guides | Not yet |
 | 6 | One long-running service: REST, MCP over HTTP, unattended runs (housekeeping, morning and evening) | Not yet |
 
-Until phase 3 you cannot finish or put off a task, so a shakedown is about capturing, organising and choosing. Some error hints mention `reopen_task`, which arrives in phase 3. Recurring tasks in the demo can be read but not changed yet.
+Recurring tasks in the demo can be read but not changed until phase 4: completing, snoozing, starting, dropping or reopening one (or reopening one of its occurrences) is refused with a hint. Their occurrences can be completed like any task.
