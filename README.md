@@ -142,7 +142,7 @@ For testing, a few more look at what the model works with, without asking it. Th
 | For testing | Shows |
 |---|---|
 | `/tools` | The model's tools and their parameters. |
-| `/tool NAME [JSON]` | Runs a read-only tool and prints its JSON result, e.g. `/tool get_candidates {"minutes_available": 30}`. |
+| `/tool NAME [ARGUMENTS]` | Runs a read-only tool with a JSON object of arguments and prints its JSON result, e.g. `/tool get_candidates {"minutes_available": 30}`. |
 | `/last` | The full results of the tool calls in the last turn. |
 | `/prompt` | The system prompt as sent. |
 | `/usage` | Tokens and estimated cost of each request in this conversation, including what was read from the cache. |

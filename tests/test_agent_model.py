@@ -91,6 +91,12 @@ def test_the_request_caches_the_stable_block_and_the_conversation() -> None:
     assert "fallbacks" not in kwargs and "betas" not in kwargs  # Haiku has none
 
 
+def test_tools_are_sent_only_when_there_are_some() -> None:
+    model = AnthropicModel("claude-haiku-5-5", "medium")
+    assert model.request(SYSTEM, TOOLS, MESSAGES)["tools"] == TOOLS
+    assert "tools" not in model.request(SYSTEM, [], MESSAGES)  # the continuity check (10.5)
+
+
 def test_fallback_is_requested_only_where_supported() -> None:
     kwargs = AnthropicModel("claude-opus-5-5", "high").request(SYSTEM, TOOLS, MESSAGES)
     assert kwargs["fallbacks"] == "default"

@@ -1,8 +1,9 @@
 """The Discord side of the bot (SPEC 10.5). The only module that imports discord.
 
 All the bot's work runs on one worker thread, one job at a time: opening the
-Orchard, every turn, every command and every completion. Nothing reaches SQLite
-from another thread, and a command sent during a turn waits for it. The event
+Orchard, every turn and every command. Nothing reaches SQLite from another
+thread, and a command sent during a turn waits for it. Completions are the one
+exception: see _completer. The event
 loop only talks to Discord.
 """
 
@@ -151,7 +152,14 @@ def _completer(bot: OrchardBot, name: str, param: str) -> Callable[..., Any]:
     ) -> list[app_commands.Choice[str]]:
         if interaction.user.id != bot.owner_id:
             return []
-        values = await bot.work(bot.app.complete, name, param, current)
+        # Discord gives a completion three seconds and it cannot be deferred, so it
+        # does not queue behind a turn. Once a session exists the completions come
+        # from its fixed tool list, with no database access; before then, the worker
+        # starts the session.
+        if bot.app.conversation.started:
+            values = bot.app.complete(name, param, current)
+        else:
+            values = await bot.work(bot.app.complete, name, param, current)
         return [app_commands.Choice(name=v, value=v) for v in values[:MAX_CHOICES]]
 
     return complete

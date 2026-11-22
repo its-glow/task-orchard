@@ -1070,7 +1070,7 @@ class Model(Protocol):
   - `/new` ends the session and starts another, which reads the profile again and starts on basic. `/strategic` and `/basic` switch tier. `/exit` or `/quit`, or end of input, exits. `/help` lists every command on stderr; an unknown `/` command is answered by pointing to it.
   - **Tester commands** let the person testing the app check the model's work. None calls the model or adds anything to the conversation, so the model never sees them. What they show goes to stdout; complaints about how one was used go to stderr. The code is in `agent/commands.py`.
     - `/tools` lists the catalogue: each tool's parameters (`?` marks an optional one), whether it is read-only, and the first paragraph of its description.
-    - `/tool NAME [JSON]` runs one tool through `call_tool`, exactly as the model's calls run, and prints the result as indented JSON, errors included. Only read-only tools run; any other is refused, naming the ones that do. Changing the database by hand is done with an outside tool.
+    - `/tool NAME [ARGUMENTS]`, the arguments a JSON object, runs one tool through `call_tool`, exactly as the model's calls run, and prints the result as indented JSON, errors included. Only read-only tools run; any other is refused, naming the ones that do. Changing the database by hand is done with an outside tool.
     - `/last` prints each tool call of the latest turn with its full result. The stderr line shows only what was asked for.
     - `/prompt` prints the system prompt as sent, block by block, marking the cached one.
     - `/usage` prints a row per request in the current session (since `/new`): model, input tokens neither read from nor written to the cache, cache writes, cache reads, output, and an estimated cost from `PRICES` in `agent/model.py`, plus a total. A model with no price shows `?`. Each request's figures are also passed to the session's listener as a `usage` event, so the transcript has them.
@@ -1129,7 +1129,7 @@ A scenario checks that a real model, given the app's prompt and tools, does the 
 - Without a token or a user id it prints what is missing to stderr and exits 1. Without credentials for the Claude API it fails as `chat` does. Both checks come before Discord is contacted.
 - **One person.** Messages and commands from anyone else are ignored; a command from someone else is answered, privately, that the bot has one user. The bot's own messages are ignored.
 - **Direct messages only.** Messages in a server channel are ignored, so the bot needs no privileged intent. Its slash commands are offered in DMs and in servers alike, since Discord lets a DM open only with a bot that shares a server with the user.
-- Like `chat`, it opens the database directly. One worker thread does all the work of the bot: it opens the `Orchard` and runs every turn, command and check, one at a time. Nothing reaches SQLite from another thread, and a command sent during a turn waits for it.
+- Like `chat`, it opens the database directly. One worker thread does all the work of the bot: it opens the `Orchard` and runs every turn, command and check, one at a time (completions aside, below). Nothing reaches SQLite from another thread, and a command sent during a turn waits for it.
 
 #### Conversations
 
@@ -1142,7 +1142,7 @@ Each message is a turn, as a line is in `chat`. Which session it goes to:
 
 The rule is that a conversation ends when it goes idle, unless it was left on an open question that the new message takes up. The check is made when the next message arrives rather than by a timer when the idle limit passes: it then has the reply in hand, nothing runs for a conversation that is never resumed, and there is nothing to schedule.
 
-- **The check is one request to the basic tier's model**, separate from every session and outside the append-only rule, since it belongs to no session. It sends no tools. Its system prompt is `agent/continuity.md`, which is not a guide and never reaches a session's prompt. Its one user message holds the assistant's last answer in the session, how long ago it was given (in hours and minutes), and the new message. The reply's first word, `continue` or `new`, is the decision; anything else counts as `new`.
+- **The check is one request to the basic tier's model**, separate from every session and outside the append-only rule, since it belongs to no session. It sends no tools. Its system prompt is `agent/continuity.md`, which is not a guide and never reaches a session's prompt. Its one user message holds the assistant's last answer in the session, how long before the new message it was given (in its two largest units, such as `2 days 3 hours`), and the new message. The reply's first word, `continue` or `new`, is the decision; anything else counts as `new`.
 - When a new session starts in this way, the answer to the message ends with a line in Discord's small text: `-# New conversation.`
 - A session lives only in memory. Restarting the bot starts afresh.
 - The decision, with the request's usage, goes to the transcript as a `continuity` event. A failed check is reported like a failed turn, and the message is not answered.
@@ -1163,7 +1163,7 @@ The commands of `chat` (section 10.2) are defined once, in a registry in `agent/
 - In `chat`, a command's parameters are read from the rest of the line: each but the last up to the next space, the last to the end of the line. `/tool get_task {"task_id": 12}` gives `name` and `arguments` as before.
 - Terminal-only: `/exit` and `/quit`.
 - In Discord, the bot acknowledges each command at once, since Discord drops one not acknowledged within three seconds, then sends its output: inside a code block when it fits in one message, otherwise as a text file attached under the command's name. A command that shows nothing is answered `Done.`
-- `/tool`'s `name` offers the catalogue's read-only tools as completions.
+- `/tool`'s `name` offers the catalogue's read-only tools as completions. Discord allows a completion three seconds and no deferring, so once a session exists the completions are read from its tool list, which touches no database, without waiting for the worker.
 
 #### Transcripts
 
@@ -1171,7 +1171,7 @@ As in `chat`: every message, tool outcome, request's usage and continuity check,
 
 #### Tests
 
-`test_commands.py` and `test_discord.py`, with `ScriptedModel` and no network: chat's behaviour is unchanged by the registry, and `/help` lists every entry; a command added to the registry appears in `chat` and, built offline into a Discord command tree, in the bot with its parameters, while a terminal-only one does not; each of the four routing rules above, the check's request, every reading of its reply, and its transcript event; splitting a long answer; the owner check; and the missing-setting messages.
+`test_commands.py` and `test_discord.py`, with `ScriptedModel` and no network: chat's behaviour is unchanged by the registry, and `/help` lists every entry; a command added to the registry appears in `chat` and, built offline into a Discord command tree, in the bot with its parameters, while a terminal-only one does not; each of the four routing rules above, the check's request, every reading of its reply, and its transcript event; splitting a long answer; the owner check on messages (and that bots and server messages are ignored) and on commands; and the missing-setting messages.
 
 ## 11. Phases and acceptance
 

@@ -6,6 +6,8 @@ import io
 import json
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -30,6 +32,7 @@ from task_orchard.discord_bot.app import (
     DONE,
     LIMIT,
     NEW_CONVERSATION,
+    NOT_OWNER,
     BotApp,
     BotSettings,
     bot_settings,
@@ -318,6 +321,74 @@ def test_completion_offers_read_only_tools(orchard: Orchard, clock: FixedClock) 
     assert offered == ["get_candidates"]
     assert "drop_tasks" not in app.complete("tool", "name", "")
     assert app.complete("tool", "arguments", "") == []
+
+
+# --- the owner check, on the Discord side ---
+
+OWNER = 42
+
+
+def _offline_bot() -> tuple[client.OrchardBot, Mock]:
+    bot = client.OrchardBot(OWNER, lambda: None)  # type: ignore[arg-type, return-value]
+    app = Mock()
+    bot._app = app
+    return bot, app
+
+
+def _message(author: int, *, is_bot: bool = False, guild: object = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        author=SimpleNamespace(id=author, bot=is_bot),
+        guild=guild,
+        content="What now?",
+        reference=None,
+        channel=Mock(),
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        _message(7),  # someone else
+        _message(OWNER, is_bot=True),  # a bot, the bot itself included
+        _message(OWNER, guild=object()),  # the owner, but in a server channel
+    ],
+    ids=["stranger", "bot", "server"],
+)
+async def test_messages_reach_the_app_only_from_the_owner_in_dms(message) -> None:  # noqa: ANN001
+    bot, app = _offline_bot()
+    await bot.on_message(message)
+    assert app.mock_calls == []
+    assert message.channel.mock_calls == []
+
+
+def _interaction(user: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        user=SimpleNamespace(id=user),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+
+async def test_commands_from_anyone_else_are_refused_privately() -> None:
+    bot, app = _offline_bot()
+    stranger = _interaction(7)
+    await bot.tree.get_command("usage").callback(stranger)  # type: ignore[union-attr]
+    stranger.response.send_message.assert_awaited_once_with(NOT_OWNER, ephemeral=True)
+    stranger.response.defer.assert_not_awaited()
+    assert app.mock_calls == []
+
+
+async def test_the_owners_command_is_acknowledged_first() -> None:
+    from task_orchard.discord_bot.app import Output
+
+    bot, app = _offline_bot()
+    app.command.return_value = Output(text="```\nhi\n```")
+    owner = _interaction(OWNER)
+    await bot.tree.get_command("tool").callback(owner, name="read_profile", arguments=None)  # type: ignore[union-attr]
+    owner.response.defer.assert_awaited_once()
+    app.command.assert_called_once_with("tool", {"name": "read_profile"})
+    owner.followup.send.assert_awaited_once_with("```\nhi\n```")
+    bot.worker.shutdown()
 
 
 # --- settings and the command line ---
