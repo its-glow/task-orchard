@@ -125,3 +125,32 @@ def latest_completion_by_pattern(session: Session) -> dict[int, datetime]:
         .group_by(Task.pattern_id)
     )
     return dict(rows.all())
+
+
+def recent_completions(session: Session, recurring_id: int, limit: int) -> list[datetime]:
+    """When a recurring task's instances were completed, newest first."""
+    return list(
+        session.scalars(
+            sa.select(Completion.completed_at)
+            .join(Task, Task.id == Completion.task_id)
+            .where(Task.parent_id == recurring_id)
+            .order_by(Completion.completed_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+def recurring_done(
+    session: Session, recurring_ids: Iterable[int]
+) -> dict[int, tuple[int, datetime]]:
+    """Per recurring task: (instances done, latest completion). Only tasks with one."""
+    ids = list(recurring_ids)
+    if not ids:
+        return {}
+    rows = session.execute(
+        sa.select(Task.parent_id, sa.func.count(), sa.func.max(Completion.completed_at))
+        .join(Completion, Completion.task_id == Task.id)
+        .where(Task.parent_id.in_(ids), Task.status == Status.DONE)
+        .group_by(Task.parent_id)
+    )
+    return {parent: (count, latest) for parent, count, latest in rows}

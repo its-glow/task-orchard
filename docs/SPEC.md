@@ -2,7 +2,7 @@
 
 This is the build document. It says exactly what each part does, so that implementation needs no further design decisions. `IMPLEMENTATION_PLAN.md` explains why the design is what it is; read it once for context. Where the two differ, this document wins (section 13 lists the refinements).
 
-**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app) and 3 (leading edge and completion) are done and tested; the four scenarios of Phases 2A and 3 pass on Claude Haiku 5.5. Phases 4–6 are specified here and not yet built.
+**Status.** Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion) and 4 (recurrence) are done and tested; the six scenarios of Phases 2A to 4 pass on Claude Haiku 5.5. Phases 5 and 6 are specified here and not yet built.
 
 **How it is used.** Task Orchard has its own assistant, called the app: a loop that talks to a model and calls the operations of section 8 directly (section 10.2). The app is the primary way in, and behaviour is designed and tested against it. Other assistants reach the same operations over MCP, and programs over REST; both are adapters built out in Phase 6 (section 12).
 
@@ -492,7 +492,7 @@ Stored fields: `rrule`, `recur_dtstart`, `lead_minutes`, `recur_firmness`, `last
 - `rrule` is an RFC 5545 RRULE value such as `FREQ=WEEKLY;BYDAY=FR`. A leading `RRULE:` is stripped. Text containing `DTSTART` or a newline is rejected.
 - `FREQ` must be `DAILY`, `WEEKLY`, `MONTHLY` or `YEARLY`. Anything more frequent is rejected with `invalid`.
 - `BYHOUR`, `BYMINUTE` and `BYSECOND` are rejected with `invalid`: the time of day comes from `due_time` alone, and these parts would let a daily rule produce several slots a day (`FREQ=DAILY;BYHOUR=9,17`). The hint says to use `due_time`, or two recurring tasks.
-- `UNTIL` is accepted as a date (`20261231`) or a date and time with or without `Z`. A `Z` value is converted to local wall-clock time before parsing, because the rule is evaluated on naive local time and dateutil rejects a UTC `UNTIL` there.
+- `UNTIL` is accepted as a date (`20261231`) or a date and time with or without `Z`. A date alone means the end of that day, so "until 31 December" includes a slot on the 31st at any due time. A `Z` value is converted to local wall-clock time before parsing, because the rule is evaluated on naive local time and dateutil rejects a UTC `UNTIL` there.
 - The rule must parse with `dateutil.rrule.rrulestr` and must produce at least one slot after `now`.
 - `BYMONTHDAY=31` skips months without a 31st. The hint, and the triage skill, steer to `BYMONTHDAY=-1` for "the last day of the month". The `next_slots` in the create response let the agent see what a rule really does.
 - **A rule that runs out** (through `COUNT` or `UNTIL`) retires its task: when `roll_forward` finds no next slot for an open scheduled task, and the task has no open instances, it drops the task with reason `schedule ended`. While instances remain open, it waits.
@@ -502,7 +502,7 @@ Stored fields: `rrule`, `recur_dtstart`, `lead_minutes`, `recur_firmness`, `last
 
 `next_slot(R, after)` is the first slot strictly later than `after`. `after` is converted to local wall-clock time before the rule is consulted.
 
-**Creation.** `last_spawned_slot = now`, so the first instance is for the first slot after creation.
+**Creation.** `last_spawned_slot = now`, so the first instance is for the first slot after creation. `create_task` does not spawn it: `roll_forward` has already run for that request, so the first instance appears on the next request whose `now` is inside the lead window.
 
 **`roll_forward(session, now, tz)`.** Runs at the start of every request. For each open scheduled task R, in id order:
 
@@ -528,7 +528,7 @@ while slot exists and slot − lead <= now and spawned < 60:
     spawned += 1
 ```
 
-- An **instance** is created with: R's `title`; `parent_id = R.id`; `occurrence_at = slot`; `deadline = slot`; `deadline_firmness = R.recur_firmness`; `triaged = false`. Nothing else is copied. Priority and motive reach it from R by ordinary inheritance (section 5.4), as for any child. Every other field starts unset, exactly as for a captured task.
+- An **instance** is created with: R's `title`; `parent_id = R.id`; `occurrence_at = slot`; `deadline = slot`; `deadline_firmness = R.recur_firmness`; `triaged = false`. The deadline is recorded with source `user`, since it comes from the rule the user set, so a later guess cannot move it. Nothing else is copied. Priority and motive reach it from R by ordinary inheritance (section 5.4), as for any child. Every other field starts unset, exactly as for a captured task.
 - **Spawned instances wait in the inbox.** Nobody is in the conversation when the clock creates an instance, so it is in the same position as a capture, and the triage skill fills it in the same way (from its parent, its previous occurrences, matching patterns and the profile). While untriaged it is not a candidate, but `get_critical` includes it (section 5.8), so a deadline cannot go unseen.
 - An instance that was broken down and is then closed as `missed` takes its open descendants with it: they are dropped with reason `instance missed`, so no open task is left under a closed parent.
 - **Idempotent:** calling it twice with the same `now` changes nothing the second time. The unique index on `(parent_id, occurrence_at)` backs this up.
@@ -543,6 +543,10 @@ while slot exists and slot − lead <= now and spawned < 60:
 
 - if R has open instances, the oldest is completed;
 - otherwise the next slot's instance is created now, as in the spawn rule but triaged, since it is completed at once (`spawned` is logged); `last_spawned_slot` moves to that slot, and that instance is completed. This is the "did Friday's email on Tuesday" case.
+
+Completing a scheduled task, directly or through one of its instances, returns `next_slot`: the stamp of the first slot after `last_spawned_slot`, which is the next occurrence still to be spawned. The `recurring` block of a scheduled task's row has `mode`, `cadence`, `last_done`, `done_count` and `next_slot`; while R is paused, `next_slot` is the first slot after the pause ends.
+
+`start_task` on a scheduled task is `invalid`, with a hint to start its open instance: the occurrences are what get worked on. A flexible task can be started as itself.
 
 **Changing the rule** (`update_task` with `recurrence`): `recur_dtstart` is recomputed from today, `last_spawned_slot` becomes `max(last_spawned_slot, now)`, and existing instances are left alone.
 
@@ -590,7 +594,8 @@ Stored fields: `cadence` (free text for the agent) and optionally `gap_days`.
 - Dropping a recurring task retires it and drops its open instances.
 - **A recurring task has no `achievable` value.** It is a container for occurrences, not a step. Rows omit the key, `create_task` and `update_task` reject `achievable` for it (`invalid`), and the rule of section 8.2 that adding a child flips the parent to `no` does not apply to it. Each instance has its own `achievable`, like any task.
 - **Patterns are references, never automatic.** A recurring task and its instances are filed under a pattern only when the agent chooses one, as for any other task (at triage, or at completion through `complete-and-reflect`). The recurrence check, `last_done`, `done_count` and the gaps come from R's instances directly and need no pattern.
-- A plain task can be converted to recurring through `update_task(recurrence=...)` if it is open, has no children, is not an instance, and has no deadline (or the same call clears it). The reverse is `unsupported`.
+- A plain task can be converted to recurring through `update_task(recurrence=...)` if it is open, has no children, is not an instance, blocks no open task (a recurring task cannot be a blocker), and has no deadline (or the same call clears it; a deadline set by the user needs `sources` `user` on that call, as for any protected field). Its `achievable` value is removed. The reverse is `unsupported`.
+- A change to the recurrence keys is logged in the `updated` event as `changes.recurrence: {from, to}`, each side the task's recurrence keys in wire form (`null` on conversion).
 
 ## 8. Operations
 
@@ -1159,11 +1164,11 @@ The tool functions moved out of `mcp/server.py` into the catalogue unchanged, an
 | `test_agent_model.py` | Offline, with a fake client: the tiers come from the settings with their efforts; the request marks the stable system block and the conversation for caching and sends no thinking setting; fallback is requested only for models that support it; a reply's blocks are read whole; stop reasons map as stated; an API failure becomes `ModelUnavailable`. |
 | `test_layering.py` | By reading the imports of every module: `core` imports nothing from `tools`, `agent`, `mcp` or `api`; `tools` imports nothing from `agent`, `mcp` or `api`; `agent` and `mcp` import nothing from each other; only `agent/model.py` imports `anthropic`. |
 
-### Phase 3 — Leading edge and completion
+### Phase 3 — Leading edge and completion (done)
 
 Build: `subdivide_task`, `start_task`, `complete_task` (without recurrence), `snooze_task`, `drop_tasks`, `reopen_task`, per-task counts (5.6), `find_patterns`, `save_pattern` (stored fields and counts). Skills: `subdivide`, `complete-and-reflect`.
 
-The Phase 1 rule for recurring tasks still holds, in its simplest form: `start_task`, `complete_task`, `snooze_task`, `drop_tasks` and `reopen_task` raise `unsupported` when the target is a recurring task, and `reopen_task` also when it is an instance (the instance cap arrives with recurrence). Phase 4 adds every recurrence path at once. An open instance is otherwise a plain task: it can be completed, snoozed or dropped, with no `next_slot` or `recurrence_check`. No schema change was needed.
+Until Phase 4, the Phase 1 rule for recurring tasks held, in its simplest form: `start_task`, `complete_task`, `snooze_task`, `drop_tasks` and `reopen_task` raise `unsupported` when the target is a recurring task, and `reopen_task` also when it is an instance (the instance cap arrives with recurrence). Phase 4 adds every recurrence path at once. An open instance is otherwise a plain task: it can be completed, snoozed or dropped, with no `next_slot` or `recurrence_check`. No schema change was needed.
 
 Done. The scenarios `subdivide` (strategic tier) and `complete-and-reflect` (basic) pass on Haiku 5.5, as do the two from Phase 2A.
 
@@ -1175,7 +1180,7 @@ Done. The scenarios `subdivide` (strategic tier) and `complete-and-reflect` (bas
 | `test_patterns.py` | Create, rename, name clash, `learned` limit, merge moves tasks, search. |
 | `test_events_exhaustive.py` | For every mutating operation: exactly the events of 6.4, in the same transaction. |
 
-### Phase 4 — Recurrence
+### Phase 4 — Recurrence (done)
 
 Build: `core/recurrence.py`, the `recurrence` object in `create_task` and `update_task`, recurrence paths in `complete_task`, `snooze_task`, `drop_tasks`. Change the seed so scheduled instances are produced by `roll_forward` where practical.
 
@@ -1185,6 +1190,8 @@ Build: `core/recurrence.py`, the `recurrence` object in `create_task` and `updat
 | `test_roll_forward.py` | First instance appears when the lead window opens, untriaged, with only title, parent, slot and deadline set, and is listed by `get_critical`; idempotence; a missed instance's open descendants are dropped; a rule that runs out retires its task once no instance is open; lockstep whether the previous instance was done early, late or never; the two-instance cap and `missed`; a long absence leaves two open and the rest missed; pause and resume skip slots without marking them missed; the 60-per-request bound continues on the next request. |
 | `test_recurring_complete.py` | Completing a scheduled task directly, with and without an open instance; flexible completion directly and through an instance; `gap_days` snooze; the recurrence check's contents; `instance_exists`; creating an instance copies only the title and wakes a sleeping flexible task; flexible task reappears as a candidate when awake with `past_wake_days`. |
 | `test_recurring_rules.py` | Every rule in 7.3, including that a recurring task has no `achievable` and gets no pattern unless one is given; conversion from a plain task. |
+
+The seed's recurring history stays hand-built, because replaying four weeks through `roll_forward` would mean running the seed against a moving clock; `test_seed_roll.py` checks that its rows and events are what `roll_forward` would have written, and that a request on the seed writes nothing. `tests/scenarios/test_recurring.py` checks setting up a monthly scheduled task and recording a run against the flexible task.
 
 ### Phase 5 — Learning and review
 
@@ -1281,10 +1288,19 @@ Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PL
 | Scenarios | Run through the app's loop by `pytest -m scenario`, from Phase 2A, in place of manual scripts run by hand in an MCP host. They assert on tool calls and end state, are excluded from the normal run, and are never part of acceptance. |
 | REST views | REST routes do not return the model-facing rows of section 4, as first planned. They get program-facing views: full titles, instants with offsets, stable keys and paging. |
 | Unattended runs | In Phase 6, housekeeping and the morning and evening skills are runs of the app started by the operating system's scheduler. Task Orchard still has no background process of its own. An agent platform over MCP remains possible but is no longer the plan. |
-| Phase 3 and recurrence | Every write on a recurring target stays `unsupported` until Phase 4, including starting and snoozing a flexible task, which section 8.6 and 7.2 would allow on their own. A half-built recurrence path is more work than it saves while the phases move quickly; Phase 4 adds them together. |
+| Phase 3 and recurrence | Every write on a recurring target stayed `unsupported` until Phase 4, including starting and snoozing a flexible task, which section 8.6 and 7.2 would allow on their own. A half-built recurrence path is more work than it saves while the phases move quickly; Phase 4 added them together. |
 | Achievable flip in subdivide | `subdivide_task` logs the parent's flip to `achievable: no` with `updated`, like every other way of adding a child. The first draft of 6.4 left it out for this one route. |
 | Pattern at completion | The `completed` event carries `pattern_id` when the call filed the task, so filing at completion is logged like any other change (ground rule 5). |
 | `unblocked` | Includes descendants freed through a blocked parent (the venue as well as the offsite), and is capped at 10 rows with `unblocked_more`, so a large project cannot blow the response budget. |
 | `drop_tasks` | `parent_checks` reuses `complete_task`'s `parent_check` shape as a list. A listed task is reported in `dropped` even when another listed task is its ancestor. |
 | Pattern merges | A merge writes `patterns_merged` and, when the same call changes fields, also `pattern_saved`, so each event means one thing. The merge happens before a rename, so the survivor can take the merged pattern's name. |
 | Commands | `task-orchard mcp` names the stdio MCP server from Phase 2A. The bare command and `serve` keep running it until Phase 6, when `serve` becomes the HTTP service; that change is confirmed with the user first. |
+| Instance deadlines | A spawned instance's deadline has source `user`: it comes from the rule the user set, and triage must not guess it away. |
+| First instance | `create_task` does not spawn a scheduled task's first instance; the next request does. `roll_forward` runs once, at the start of a request, so every spawn comes from the same place and `create_task` writes only `created`. |
+| Converting a blocker | A plain task that blocks open tasks cannot become recurring, rather than having its links removed or moved to an instance. 7.3 forbids a recurring blocker; refusing keeps the call free of side effects, and the hint says to unlink first. |
+| Recurrence in `updated` | Recorded as `changes.recurrence: {from, to}`, with the whole set of recurrence keys on each side, rather than one change per stored column (`rrule`, `recur_dtstart`, `lead_minutes`, ...). The wire keys are what the agent set and what it reads back. |
+| Missed, in order | When the cap closes an instance, its dropped descendants are logged first, then `missed`, then the new instance's `spawned`: each event follows the change it reports. |
+| UNTIL as a date | Means the end of that day, not its start, so a rule "until 20 March" with a 09:00 due time still has 20 March's slot. |
+| Reopening a flexible instance | Does not undo the snooze its completion set on R; the response carries a `note` saying R is asleep and how to wake it. Undoing it would need the snooze from before the completion, which nothing stores. |
+| Waking a scheduled task that is not paused | `snooze_task(days=0)` on a scheduled task with no snooze writes nothing, as for any task. |
+| Scenario hint | Rejecting `deadline`, `firmness` or `achievable` on a recurring task now says to call again without them and where firmness goes. Haiku sent all three for "pay the rent on the 1st" and took three calls to recover from the earlier hint. |

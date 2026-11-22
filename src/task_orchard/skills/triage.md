@@ -24,7 +24,10 @@ Goal: every task in the inbox gets its fields filled in and leaves the inbox, wi
    - Mark where each value came from in `sources`: `"user"` for what the user said, `"pattern"` for what you took from a pattern. Leave your own guesses out of `sources`; they are recorded as guesses.
    - If the result has `skipped`, the user had set those fields before. Leave them unless the user has just asked for the change.
 6. **Duplicates.** If `capture_tasks` reported `possible_duplicates`, or two inbox tasks look like the same thing, say so and ask whether to keep both.
-7. **Recurring intent** ("twice a week", "every Friday"): if `update_task` accepts `recurrence`, convert the task. For "the last day of the month" use `BYMONTHDAY=-1`. Otherwise note the intent in the task's notes and tell the user it will repeat later.
+7. **Recurring intent**: convert the task with `recurrence` in the same `update_task` call.
+   - Calendar-bound ("every Friday by 5"): `{"mode": "scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", "due_time": "17:00"}`. Last day of the month is `BYMONTHDAY=-1`.
+   - Looser ("twice a week"): `{"mode": "flexible", "cadence": "<their words>"}`, with `gap_days` for a natural rest between times.
+   - No deadline or `achievable`; put an existing deadline in `clear`.
 8. **Instances of recurring tasks** (rows with `instance_of`) also land in the inbox. Fill them like any task, using the parent and its previous occurrence (`get_task` on the parent shows its recent children). Do not ask the user about them.
 9. **Finish** by telling the user, in two or three lines, what you assumed: "I've put the desk down as low priority, about an hour, no deadline." A correction is cheaper for them than a question.
 

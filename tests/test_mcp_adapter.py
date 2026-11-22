@@ -55,3 +55,16 @@ async def test_a_nested_input_schema_round_trips(orchard: Orchard) -> None:
     invite, cake = result.data["children"]
     assert cake["blocked_by"] == [{"id": invite["id"], "title": "Invite"}]
     assert cake["estimate_minutes"] == 30
+
+
+async def test_the_recurrence_object_round_trips(orchard: Orchard) -> None:
+    async with Client(build_server(orchard)) as client:
+        result = await client.call_tool(
+            "create_task",
+            {
+                "title": "Pay rent",
+                "recurrence": {"mode": "scheduled", "rrule": "FREQ=MONTHLY;BYMONTHDAY=1"},
+            },
+        )
+    assert result.data["task"]["recurring"]["mode"] == "scheduled"
+    assert result.data["next_slots"][0]["at"] == "2026-04-01T23:59"

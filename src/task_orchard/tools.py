@@ -62,6 +62,33 @@ class CaptureItem(TypedDict):
     notes: NotRequired[str]
 
 
+class RecurrenceSpec(TypedDict):
+    mode: NotRequired[Annotated[str, Field(json_schema_extra={"enum": ["scheduled", "flexible"]})]]
+    cadence: NotRequired[
+        Annotated[str, Field(description='In words, e.g. "twice a week, not two days running".')]
+    ]
+    rrule: NotRequired[
+        Annotated[str, Field(description='Scheduled only: e.g. "FREQ=WEEKLY;BYDAY=FR".')]
+    ]
+    due_time: NotRequired[
+        Annotated[str, Field(description='Scheduled only: time due, e.g. "17:00".')]
+    ]
+    lead_days: NotRequired[
+        Annotated[float, Field(description="Scheduled only: days before it appears, e.g. 1.")]
+    ]
+    firmness: NotRequired[FirmnessName]
+    gap_days: NotRequired[
+        Annotated[int, Field(description="Flexible only: days away after each completion.")]
+    ]
+
+
+RECURRENCE = (
+    'Makes it repeat. Calendar rule: {"mode": "scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", '
+    '"due_time": "17:00"}. Anything looser: {"mode": "flexible", "cadence": "about every '
+    'five days", "gap_days": 5}. A recurring task takes no deadline, firmness or achievable.'
+)
+
+
 class ChildItem(TypedDict):
     title: Annotated[str, Field(description='e.g. "Draft the outline".')]
     description: NotRequired[str]
@@ -127,7 +154,10 @@ def catalogue(orchard: Orchard) -> list[Tool]:
 
     @_tool
     def create_task(
-        title: Annotated[str, _p('Short title, e.g. "Book the MOT".')],
+        title: Annotated[
+            str | None,
+            _p('Short title, e.g. "Book the MOT". Optional under a flexible recurring task.'),
+        ] = None,
         description: Annotated[str | None, _p("What the task is, e.g. the goal.")] = None,
         notes: Annotated[str | None, _p("Working notes, e.g. phone numbers.")] = None,
         parent_id: Annotated[int | None, _p("Put it under this task, e.g. 12.")] = None,
@@ -146,6 +176,7 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         pattern_id: Annotated[int | None, _p("Kind of work, from find_patterns, e.g. 3.")] = None,
         blocked_by: Annotated[list[int] | None, _p("Must finish first, e.g. [7].")] = None,
         blocks: Annotated[list[int] | None, _p("Must wait for this one, e.g. [9].")] = None,
+        recurrence: Annotated[RecurrenceSpec | None, _p(RECURRENCE)] = None,
         sources: Annotated[
             dict[str, SourceName] | None,
             _p('Where values came from, e.g. {"deadline": "user"}. Unlisted fields are guesses.'),
@@ -156,6 +187,7 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         Leave out anything you do not know; never fill in a middle value. Mark
         values the user stated with sources, so they are protected from later
         guesses. Adding a task under a parent makes the parent not achievable.
+        Under a flexible recurring task this creates its next occurrence.
         """
         return orchard.create_task(
             title, description=description, notes=notes, parent_id=parent_id,
@@ -163,7 +195,7 @@ def catalogue(orchard: Orchard) -> list[Tool]:
             snooze_until=snooze_until, achievable=achievable,
             estimate_minutes=estimate_minutes, activation=activation, drain=drain,
             motive=motive, conditions=conditions, pattern_id=pattern_id,
-            blocked_by=blocked_by, blocks=blocks, sources=sources,
+            blocked_by=blocked_by, blocks=blocks, recurrence=recurrence, sources=sources,
         )  # fmt: skip
 
     @_tool
@@ -189,6 +221,10 @@ def catalogue(orchard: Orchard) -> list[Tool]:
         pattern_id: Annotated[int | None, _p("e.g. 3.")] = None,
         clear: Annotated[list[ClearName] | None, _p('Fields to unset, e.g. ["deadline"].')] = None,
         triaged: Annotated[bool | None, _p("Pass false to leave it in the inbox.")] = None,
+        recurrence: Annotated[
+            RecurrenceSpec | None,
+            _p("Make a plain task repeat, or change a recurring task's keys. " + RECURRENCE),
+        ] = None,
         sources: Annotated[
             dict[str, SourceName] | None, _p('e.g. {"priority": "user"} when the user said so.')
         ] = None,
@@ -205,7 +241,8 @@ def catalogue(orchard: Orchard) -> list[Tool]:
             deadline=deadline, firmness=firmness, snooze_until=snooze_until,
             achievable=achievable, estimate_minutes=estimate_minutes,
             activation=activation, drain=drain, motive=motive, conditions=conditions,
-            pattern_id=pattern_id, clear=clear, triaged=triaged, sources=sources,
+            pattern_id=pattern_id, clear=clear, triaged=triaged, recurrence=recurrence,
+            sources=sources,
         )  # fmt: skip
 
     @_tool

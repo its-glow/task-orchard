@@ -55,6 +55,38 @@ def _complete_untracked(o: Orchard, t: Ids) -> None:
     t["new"] = result["completed"]["id"]
 
 
+WEEKLY = {"mode": "scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", "due_time": "17:00"}
+
+
+def _scheduled(o: Orchard) -> Ids:
+    """Created Wednesday 10:00; Friday's instance appears on Thursday at 17:00."""
+    return {"r": o.create_task("Summary", recurrence=WEEKLY)["task"]["id"]}
+
+
+def _flexible(o: Orchard, **kw: Any) -> Ids:
+    spec = {"mode": "flexible", **kw}
+    return {"r": o.create_task("Laundry", recurrence=spec)["task"]["id"]}
+
+
+def _sleeping_flexible(o: Orchard) -> Ids:
+    t = _flexible(o, gap_days=3)
+    o.complete_task(t["r"])
+    return t
+
+
+def _flexible_with_instance(o: Orchard) -> Ids:
+    t = _flexible(o)
+    return t | {"i": o.create_task(parent_id=t["r"])["task"]["id"]}
+
+
+def _instance(o: Orchard, t: Ids) -> None:
+    t["new"] = o.create_task(parent_id=t["r"])["task"]["id"]
+
+
+def _complete_recurring(o: Orchard, t: Ids) -> None:
+    t["new"] = o.complete_task(t["r"])["completed"]["id"]
+
+
 def _blocker_and_blocked(o: Orchard) -> Ids:
     blocker = make(o, "Blocker")
     return {"blocker": blocker, "blocked": make(o, "Blocked", blocked_by=[blocker])}
@@ -179,6 +211,52 @@ CASES: dict[str, Case] = {
         lambda o, t: o.save_pattern(t["keep"], name="Keep"),
         [],
     ),
+    # Recurring tasks (section 7).
+    "create_task recurring": (
+        lambda o: {},
+        lambda o, t: t.update(new=o.create_task("R", recurrence=WEEKLY)["task"]["id"]),
+        [("created", "new")],  # the first instance spawns on a later request
+    ),
+    "create_task instance wakes its recurring task": (
+        _sleeping_flexible,
+        _instance,
+        [("created", "new"), ("updated", "r")],
+    ),
+    "update_task make recurring": (
+        lambda o: {"task": make(o)},
+        lambda o, t: o.update_task(t["task"], recurrence={"mode": "flexible"}),
+        [("updated", "task")],
+    ),
+    "update_task pause": (
+        _scheduled,
+        lambda o, t: o.update_task(t["r"], snooze_until="+10d"),
+        [("updated", "r"), ("paused", "r")],
+    ),
+    "complete_task scheduled early": (
+        _scheduled,
+        _complete_recurring,
+        [("spawned", "new"), ("completed", "new")],
+    ),
+    "complete_task flexible": (
+        _flexible,
+        _complete_recurring,
+        [("created", "new"), ("completed", "new")],
+    ),
+    "snooze_task pause": (
+        _scheduled,
+        lambda o, t: o.snooze_task(t["r"], days=7),
+        [("paused", "r")],
+    ),
+    "snooze_task resume": (
+        lambda o: {"r": o.create_task("S", recurrence=WEEKLY, snooze_until="+7d")["task"]["id"]},
+        lambda o, t: o.snooze_task(t["r"], days=0),
+        [("resumed", "r")],
+    ),
+    "drop_tasks recurring": (
+        _flexible_with_instance,
+        lambda o, t: o.drop_tasks([t["r"]], reason="x"),
+        [("dropped", "r"), ("dropped", "i")],
+    ),
     "write_profile_note": (
         lambda o: {},
         lambda o, t: o.write_profile_note("energy", "Low after 3pm."),
@@ -222,6 +300,14 @@ FAILURES: dict[str, tuple[Callable[[Orchard], Ids], Callable[[Orchard, Ids], Any
     "drop_tasks with an unknown id": (
         lambda o: {"task": make(o)},
         lambda o, t: o.drop_tasks([t["task"], 9999], reason="x"),
+    ),
+    "create_task a second flexible instance": (
+        _flexible_with_instance,
+        lambda o, t: o.create_task(parent_id=t["r"], title="Second"),
+    ),
+    "update_task recurring with a deadline left on": (
+        lambda o: {"task": make(o, deadline="friday")},
+        lambda o, t: o.update_task(t["task"], recurrence={"mode": "flexible"}),
     ),
     "save_pattern merge onto a taken name": (
         lambda o: {"keep": _pattern(o, "Keep"), "fold": _pattern(o, "Fold"), "x": _pattern(o, "X")},

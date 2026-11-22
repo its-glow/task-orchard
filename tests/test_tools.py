@@ -243,3 +243,28 @@ def test_phase_3_errors_round_trip(tools: list[Tool]) -> None:
     assert "days" in outcome.payload["hint"]
     outcome = call_tool(tools, "reopen_task", {"task_id": 1})
     assert outcome.is_error and outcome.payload["error"] == "not_found"
+
+
+# --- Phase 4: the recurrence object through call_tool and MCP ---
+
+
+def test_recurrence_round_trips(orchard: Orchard, tools: list[Tool]) -> None:
+    spec = {"mode": "Scheduled", "rrule": "FREQ=WEEKLY;BYDAY=FR", "due_time": "17:00"}
+    created = call_tool(tools, "create_task", {"title": "Summary", "recurrence": spec})
+    assert not created.is_error, created.payload
+    assert created.payload["next_slots"][0]["at"] == "2026-03-20T17:00"
+    laundry = call_tool(
+        tools,
+        "create_task",
+        {"title": "Laundry", "recurrence": {"mode": "flexible", "gap_days": "4"}},
+    ).payload["task"]["id"]
+    instance = call_tool(tools, "create_task", {"parent_id": laundry}).payload["task"]
+    assert instance["title"] == "Laundry"
+    updated = call_tool(
+        tools, "update_task", {"task_id": laundry, "recurrence": {"cadence": "weekly-ish"}}
+    )
+    assert updated.payload["task"]["recurring"]["cadence"] == "weekly-ish"
+    bad = call_tool(
+        tools, "create_task", {"title": "X", "recurrence": {"mode": "flexible", "x": 1}}
+    )
+    assert bad.is_error and bad.payload["error"] == "invalid"

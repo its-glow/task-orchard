@@ -107,6 +107,29 @@ class HasOpenChildren(OrchardError):
         )
 
 
+class InstanceExists(OrchardError):
+    def __init__(self, recurring_id: int, instance_id: int) -> None:
+        super().__init__(
+            ErrorCode.INSTANCE_EXISTS,
+            f"Recurring task {recurring_id} already has an open occurrence, task {instance_id}.",
+            hint=(
+                f"Work with task {instance_id} instead: change it with update_task, or complete "
+                "or drop it first."
+            ),
+            details={"recurring_id": recurring_id, "instance_id": instance_id},
+        )
+
+
+class InstanceCap(OrchardError):
+    def __init__(self, recurring_id: int, open_ids: list[int]) -> None:
+        super().__init__(
+            ErrorCode.INSTANCE_CAP,
+            f"Recurring task {recurring_id} already has two open occurrences.",
+            hint="Complete or drop one of them first, then reopen this one.",
+            details={"recurring_id": recurring_id, "open": open_ids},
+        )
+
+
 class ParentClosed(OrchardError):
     def __init__(self, parent_id: int, status: str) -> None:
         super().__init__(
