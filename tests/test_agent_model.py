@@ -83,11 +83,12 @@ def test_the_request_caches_the_stable_block_and_the_conversation() -> None:
     kwargs = AnthropicModel("claude-haiku-5-5", "medium").request(SYSTEM, TOOLS, MESSAGES)
     assert kwargs["model"] == "claude-haiku-5-5"
     assert kwargs["output_config"] == {"effort": "medium"}
+    # Summaries of the model's reasoning come back, so transcripts can show them.
+    assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert kwargs["cache_control"] == {"type": "ephemeral"}
     assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in kwargs["system"][1]
     assert "cache_control" not in SYSTEM[0]  # the session's prompt is not touched
-    assert "thinking" not in kwargs
     assert "fallbacks" not in kwargs and "betas" not in kwargs  # Haiku has none
 
 

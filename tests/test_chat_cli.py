@@ -378,3 +378,17 @@ def test_cost_estimate() -> None:
     long = Usage(input=200_000)  # over 100k: Haiku 5.5's long-prompt rate, x5
     assert cost("claude-haiku-5-5", long) == pytest.approx(0.10)
     assert cost("unknown-model", short) is None
+
+
+def test_the_transcript_keeps_the_reasoning_summary(
+    orchard: Orchard, clock: FixedClock, tmp_path: Path
+) -> None:
+    thought = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig"}
+    reply = Reply(content=[thought, {"type": "text", "text": "Hi."}], stop="end")
+    models = {BASIC: ScriptedModel([reply], "m"), STRATEGIC: ScriptedModel([])}
+    path = tmp_path / "t.jsonl"
+    chat(orchard, clock, models=models, stdin=io.StringIO("Hello\n"), stdout=io.StringIO(),
+         stderr=io.StringIO(), transcript=path)  # fmt: skip
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    answer = [r for r in records if r.get("message", {}).get("role") == "assistant"][0]
+    assert answer["message"]["content"][0] == thought

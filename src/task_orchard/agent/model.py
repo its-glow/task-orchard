@@ -5,8 +5,11 @@ code in Task Orchard that imports the vendor SDK; tests use a scripted model
 instead, so the test suite never calls a model.
 
 Requests follow the current Claude API documentation:
-- thinking is left to the model's default (adaptive on current models), and
-  depth is set with output_config.effort, fixed per tier;
+- thinking is adaptive, as current models default to, with its display set to
+  "summarized": the API never returns the raw reasoning, and by default returns
+  thinking blocks with empty text, so this is what puts a summary of the
+  model's reasoning into transcripts. Depth is set with output_config.effort,
+  fixed per tier;
 - the stable first block of the system prompt carries a cache marker, and the
   request also uses top-level automatic caching, so the conversation so far is
   cached for the next call of a turn;
@@ -27,6 +30,9 @@ TIERS = (BASIC, STRATEGIC)
 EFFORT = {BASIC: "medium", STRATEGIC: "high"}
 
 MAX_TOKENS = 16_000
+# Adaptive is the default on current models; "summarized" asks for the text of
+# each thinking block, which is otherwise empty (Claude API docs, 2026-11).
+THINKING = {"type": "adaptive", "display": "summarized"}
 # Models that support server-side fallback on a refusal (Claude API docs, 2026-11).
 FALLBACK_MODELS = frozenset(
     {
@@ -174,6 +180,7 @@ class AnthropicModel:
             "system": marked,
             "messages": messages,
             "output_config": {"effort": self.effort},
+            "thinking": THINKING,
             "cache_control": {"type": "ephemeral"},
         }
         if tools:
