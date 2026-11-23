@@ -176,13 +176,19 @@ def tool(session: Session, name: str, raw: str, out: TextIO, err: TextIO) -> Non
     print(_json(outcome.payload), file=out, flush=True)
 
 
-def last(turn_tools: Sequence[Event], out: TextIO, err: TextIO) -> None:
-    if not turn_tools:
-        print("No tool calls in the last turn.", file=err, flush=True)
+def last(turn: Sequence[Event], out: TextIO, err: TextIO) -> None:
+    """The latest turn in order: each reasoning summary, each tool call with its result."""
+    if not turn:
+        print("Nothing to show: the last turn had no reasoning summary or tool call.", file=err)
+        err.flush()
         return
-    for event in turn_tools:
-        print(tool_line(event), file=out)
-        print(_json(event["payload"]), file=out)
+    for event in turn:
+        if event["type"] == "thinking":
+            print("[thinking]", file=out)
+            print("\n".join(f"  {line}" for line in event["text"].splitlines()), file=out)
+        else:
+            print(tool_line(event), file=out)
+            print(_json(event["payload"]), file=out)
     out.flush()
 
 
@@ -296,8 +302,8 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "last",
-        "the full results of the last turn's tool calls",
-        lambda host, args, out, err: last(host.trace.turn_tools, out, err),
+        "the last turn's reasoning, and its tool calls with full results",
+        lambda host, args, out, err: last(host.trace.turn, out, err),
         testing=True,
     ),
     Command(

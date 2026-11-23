@@ -332,7 +332,21 @@ def test_last_shows_the_full_results_of_the_last_turn(orchard: Orchard, clock: F
 
 def test_last_before_any_tool_call(orchard: Orchard, clock: FixedClock) -> None:
     _, out, err, _ = run_chat(orchard, clock, ["/last"])
-    assert out == "" and "No tool calls" in err
+    assert out == "" and "Nothing to show" in err
+
+
+def test_last_shows_reasoning_and_tool_calls_in_order(orchard: Orchard, clock: FixedClock) -> None:
+    def thinking(text: str) -> dict:
+        return {"type": "thinking", "thinking": text, "signature": "sig"}
+
+    asked = calls(("read_profile", {}))
+    first = Reply(content=[thinking("Check the profile first."), *asked.content], stop="tool_use")
+    then = Reply(content=[thinking(""), thinking("It is empty.\nSay so."), *text("Empty.").content],
+                 stop="end")  # fmt: skip
+    _, out, _, _ = run_chat(orchard, clock, ["Profile?", "/last"], basic=[first, then])
+    shown = out.split("Empty.\n")[1]
+    assert shown.startswith("[thinking]\n  Check the profile first.\n-> read_profile()\n{")
+    assert shown.endswith("[thinking]\n  It is empty.\n  Say so.\n")  # empty summaries skipped
 
 
 def test_prompt_prints_the_system_prompt(orchard: Orchard, clock: FixedClock) -> None:

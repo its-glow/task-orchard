@@ -143,7 +143,7 @@ For testing, a few more look at what the model works with, without asking it. Th
 |---|---|
 | `/tools` | The model's tools and their parameters. |
 | `/tool NAME [ARGUMENTS]` | Runs a read-only tool with a JSON object of arguments and prints its JSON result, e.g. `/tool get_candidates {"minutes_available": 30}`. |
-| `/last` | The full results of the tool calls in the last turn. |
+| `/last` | The last turn step by step: a summary of the model's reasoning, then each tool call with its full result. |
 | `/prompt` | The system prompt as sent. |
 | `/usage` | Tokens and estimated cost of each request in this conversation, including what was read from the cache. |
 
@@ -164,7 +164,7 @@ The two tiers differ in model (both Haiku by default) and in how much effort the
 
 **Conversations.** Each message is a turn. Messages close together are one conversation. After a pause longer than `TASK_ORCHARD_DISCORD_IDLE_MINUTES` (30 by default), your next message is checked by the basic model: it continues the conversation only if the assistant had left you a question and you are answering it. Otherwise a new conversation starts, and the answer ends with a small *New conversation.* To be sure of continuing, use Discord's **Reply** on one of the assistant's messages; `/new` always starts afresh. Conversations live in memory, so restarting the bot starts afresh too.
 
-**Commands** are the same as in chat, as Discord slash commands: `/new`, `/strategic`, `/basic`, `/help`, and the testing ones `/tools`, `/tool` (with tool names offered as you type), `/last`, `/prompt` and `/usage`. Output comes in a code block, or as an attached file when it is long. Tool calls are not shown as they happen; `/last` shows the latest turn's, and the transcript has them all.
+**Commands** are the same as in chat, as Discord slash commands: `/new`, `/strategic`, `/basic`, `/help`, and the testing ones `/tools`, `/tool` (with tool names offered as you type), `/last`, `/prompt` and `/usage`. Output comes in a code block, or as an attached file when it is long. Tool calls are not shown as they happen; `/last` shows the latest turn's, with the model's reasoning, and the transcript has them all.
 
 **Transcripts** are kept as in chat, one file per run of the bot: `~/.cache/task-orchard/transcripts/discord-<time>.jsonl`, with each check of whether to continue recorded as a `continuity` line. `--transcript FILE` and `--no-transcript` work as in chat.
 

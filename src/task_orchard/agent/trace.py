@@ -2,8 +2,9 @@
 
 `Trace` is passed to every session as its listener (SPEC 10.2). It writes the
 transcript, one JSON line per event tagged with the session's number, and keeps
-what the tester commands show: the tool calls of the latest turn (/last) and
-the usage of every request in the current session (/usage). `chat` also has it
+what the tester commands show: the latest turn's reasoning summaries and tool
+calls, in order (/last), and the usage of every request in the current session
+(/usage). `chat` also has it
 report each tool call on stderr; the Discord bot does not (SPEC 10.5).
 """
 
@@ -35,22 +36,28 @@ class Trace:
         self.transcript = transcript
         self.tool_lines = tool_lines
         self.session_number = 0
-        self.turn_tools: list[Event] = []
+        # The latest turn's `thinking` and `tool` events, in the order they came.
+        self.turn: list[Event] = []
         self.requests: list[Event] = []
 
     def new_session(self) -> None:
         self.session_number += 1
-        self.turn_tools = []
+        self.turn = []
         self.requests = []
 
     def new_turn(self) -> None:
-        self.turn_tools = []
+        self.turn = []
 
     def __call__(self, event: Event) -> None:
-        if event["type"] == "tool":
+        if event["type"] == "message" and event["message"].get("role") == "assistant":
+            for block in event["message"].get("content") or []:
+                text = block.get("thinking") if block.get("type") == "thinking" else None
+                if text and text.strip():
+                    self.turn.append({"type": "thinking", "text": text.strip()})
+        elif event["type"] == "tool":
             if self.tool_lines is not None:
                 print(tool_line(event), file=self.tool_lines, flush=True)
-            self.turn_tools.append(event)
+            self.turn.append(event)
         elif event["type"] == "usage":
             self.requests.append(event)
         if self.transcript is not None:
