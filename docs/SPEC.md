@@ -410,7 +410,7 @@ A digest is at most this fixed set of keys. It is the only form in which history
 
 - One note per topic; topics compare without regard to case. A topic is at most 100 characters, with spacing collapsed. A replaced note takes the topic's new spelling.
 - Topic `charter` is the charter. Limit 4,000 characters.
-- Every other note: limit 1,000 characters each, 8,000 in total.
+- Every other note: limit 2,000 characters each, 24,000 in total.
 - A write that would exceed a limit raises `profile_full`, with the current sizes in `details` and the hint to consolidate existing notes first.
 - Writing the same text again, or deleting a topic that does not exist, changes nothing and writes no event.
 
@@ -870,7 +870,7 @@ In Phase 3 a digest contained the stored fields and the status counts only; Phas
 
 ### 8.18 `read_profile`, `write_profile_note` — Phase 2
 
-**`read_profile()`** returns `{charter?: {text, updated}, notes: [{topic, text, updated}], size: {used, limit}}`. Notes are ordered by topic. `size` counts the notes other than the charter, against the 8,000-character total.
+**`read_profile()`** returns `{charter?: {text, updated}, notes: [{topic, text, updated}], size: {used, limit}}`. Notes are ordered by topic. `size` counts the notes other than the charter, against the 24,000-character total.
 
 **`write_profile_note(topic, text)`**: creates or replaces the note for that topic. Blank `text` deletes it. Limits per section 6.2. Returns the same shape as `read_profile`.
 
@@ -1415,6 +1415,7 @@ Decisions made while specifying and building, which go beyond `IMPLEMENTATION_PL
 | `--help` everywhere | The user asked that every command, at least `dump` and `chat`, list its options with `--help`. argparse gives this; a test holds every command to it. |
 | Discord bot | Asked for by the user, for testing and personal use before a larger app takes over the conversation: DMs, one user, `chat`'s commands as slash commands from one registry, and transcripts as in `chat`. The user's rule is that a conversation closes after inactivity unless it was left on an open question. It is checked when the next message arrives, with that message in hand, rather than by a timer: an open question from days ago should not capture an unrelated "what now?", and nothing need run for a conversation never resumed. A Discord reply to the bot always continues, as an explicit override. Built before Phase 6 as a standalone process, by the user's choice. |
 | Reasoning in transcripts | The user asked for the model's chain of thought in transcripts. The API returns only a summary of it, and only when asked, so every request asks for `display: "summarized"`. Replies were already recorded whole, so the summaries reach the transcript with no other change. |
+| Profile size and weight | The user found 8,000 characters too narrow for what is worth knowing about them, and saw a single note (phone calls before 3pm) come up in nearly every turn's reasoning. The limits rose to 2,000 characters a note and 24,000 in all (6.2); the profile is cached after a session's first request, so the cost is small. The preamble, the overview and the `what-now` guide now say a note applies only when the decision touches the situation it describes, so a larger profile does not mean more rules checked on every turn. |
 
 ## 14. Future work
 

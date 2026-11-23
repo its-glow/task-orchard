@@ -520,8 +520,8 @@ def catalogue(orchard: Orchard) -> list[Tool]:
     ) -> dict[str, Any]:
         """Save something true of the user in general, so it is never asked again.
 
-        Replaces the whole note for that topic. Notes are short: 1,000
-        characters each, 8,000 in all; consolidate when full.
+        Replaces the whole note for that topic. Notes are short: 2,000
+        characters each, 24,000 in all; consolidate when full.
         """
         return orchard.write_profile_note(topic, text)
 

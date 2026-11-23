@@ -23,7 +23,7 @@ def profile_events(orchard: Orchard) -> list[dict]:
 def test_an_empty_profile(orchard: Orchard) -> None:
     result = orchard.read_profile()
     assert result["notes"] == []
-    assert result["size"] == {"used": 0, "limit": 8000}
+    assert result["size"] == {"used": 0, "limit": 24000}
     assert "charter" not in result
 
 
@@ -74,19 +74,19 @@ def test_limits(orchard: Orchard) -> None:
     assert caught.value.details["notes_used"] == 0
     assert "Consolidate" in caught.value.hint
 
-    orchard.write_profile_note("one", "n" * 1000)
+    orchard.write_profile_note("one", "n" * 2000)
     with pytest.raises(ProfileFull):
-        orchard.write_profile_note("two", "n" * 1001)
+        orchard.write_profile_note("two", "n" * 2001)
 
-    for n in range(2, 8):
-        orchard.write_profile_note(f"topic {n}", "n" * 1000)
-    assert orchard.read_profile()["size"] == {"used": 7000, "limit": 8000}
-    orchard.write_profile_note("last", "n" * 1000)
+    for n in range(2, 12):
+        orchard.write_profile_note(f"topic {n}", "n" * 2000)
+    assert orchard.read_profile()["size"] == {"used": 22000, "limit": 24000}
+    orchard.write_profile_note("last", "n" * 2000)
     with pytest.raises(ProfileFull) as caught:
         orchard.write_profile_note("one more", "n")
-    assert caught.value.details["notes_used"] == 8000
+    assert caught.value.details["notes_used"] == 24000
     # Replacing a note counts its new size, not both.
-    orchard.write_profile_note("last", "n" * 900)
+    orchard.write_profile_note("last", "n" * 1900)
     orchard.write_profile_note("one more", "n" * 100)
 
 

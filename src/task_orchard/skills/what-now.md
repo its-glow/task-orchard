@@ -19,7 +19,8 @@ Goal: give the user a short, well-reasoned choice of what to do next, drawn from
 4. **Rank** the rows yourself, using:
    - `group` (`pressing` first unless the user says otherwise), priority, `due`, `state`;
    - `over_energy`: a draining task when the user is tired is a poor pick;
-   - the charter and profile notes, for example time kept for things the user wants to do.
+   - the charter, for example time kept for things the user wants to do;
+   - any profile note about one of the rows in front of you, such as a time of day that suits a kind of task.
 5. **Offer 1 to 5 options**, each with one line of reason taken from the row ("due tomorrow, and the release waits on it"). When you give several, spread them across motives and say which is which ("one for work, one you wanted to do").
 6. **Shape each option.**
    - If a pick has a high `activation`, suggest a small first step ("just open the form").

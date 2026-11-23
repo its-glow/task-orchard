@@ -9,7 +9,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from task_orchard.core.service import Orchard
+from task_orchard.core.service import NOTE_MAX_CHARS, Orchard
 from task_orchard.guides import load_guides
 from task_orchard.mcp.server import build_server
 
@@ -49,7 +49,9 @@ async def test_every_tool_works_through_the_client(
         assert (await call(client, "read_profile"))["charter"]["text"]
 
         with pytest.raises(ToolError) as caught:
-            await client.call_tool("write_profile_note", {"topic": "x", "text": "y" * 1001})
+            await client.call_tool(
+                "write_profile_note", {"topic": "x", "text": "y" * (NOTE_MAX_CHARS + 1)}
+            )
         problem = json.loads(str(caught.value))
         assert problem["error"] == "profile_full" and problem["hint"]
 
