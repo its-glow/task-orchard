@@ -8,7 +8,7 @@ A single-user task and time management service with its own AI assistant. The se
 2. `IMPLEMENTATION_PLAN.md` — the design rationale: why the design is what it is. Read once for context.
 3. `INITIAL_PLAN.md` — the original idea. Historical.
 
-Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion), 4 (recurrence) and 5 (learning and review) are done. Next is Phase 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.3 describe the catalogue, the app and the MCP adapter.
+Phases 0 (scaffold and schema), 1 (tasks and graph), 2 (prioritisation), 2A (the app), 3 (leading edge and completion), 4 (recurrence) and 5 (learning and review) are done. Next is Phase 6. Work proceeds one phase at a time from `docs/SPEC.md` section 11. SPEC sections 10.1 to 10.5 describe the catalogue, the app, the MCP adapter, the command line and the Discord bot.
 
 The MCP adapter in `mcp/` is generated from the catalogue and must keep working, but it is not where behaviour is designed or tested. Do no MCP-specific work before Phase 6.
 
@@ -23,8 +23,17 @@ uv run ruff check src tests  # lint
 uv run ruff format src tests # format
 uv run task-orchard info     # which database, timezone and models are in use
 uv run task-orchard dump     # every task as CSV, derived facts included (--open, --sources)
+uv run task-orchard init     # create or migrate the database
+uv run task-orchard chat     # the app in the terminal (--strategic, --no-transcript); calls the model
+uv run task-orchard ask "…"  # one question, one answer; calls the model
+uv run task-orchard discord  # the app as a Discord bot (SPEC 10.5)
+uv run task-orchard mcp      # the MCP server over stdio; `serve` is the same until Phase 6
 TASK_ORCHARD_DB=/tmp/demo.db uv run task-orchard seed-demo   # a populated database to try things on
 ```
+
+**The default database is the user's real one** (`~/.local/share/task-orchard/orchard.db`). Before running any `task-orchard` command that reads or writes tasks (`chat`, `ask`, `discord`, `init`, `dump`, `seed-demo`), set `TASK_ORCHARD_DB` to a scratch file, unless the user has asked you to work on their real data. `chat`, `ask` and `discord` also call the model, which costs money.
+
+Every setting is an environment variable, listed in the docstring at the top of `config.py`: the database, timezone, the two model tiers, a model gateway (`TASK_ORCHARD_API_BASE_URL`, `TASK_ORCHARD_API_KEY`), `TASK_ORCHARD_THINKING` and the Discord bot's settings.
 
 ## Layout
 
@@ -110,6 +119,8 @@ Never edit a migration once a real database has been created from it; add a new 
 - **stdout belongs to MCP** when the server runs over stdio. Print diagnostics to stderr.
 - **FastMCP is at 4.x** here and changes quickly. Check its current documentation before using an API you remember from an older version. `tests/test_scaffold.py` shows the in-memory client pattern that works with the installed version.
 - **The Claude API changes quickly too.** Model ids, how thinking and effort are set, what a refusal looks like and how caching is marked have all changed recently. Read the current documentation (or the `claude-api` skill) before changing `agent/model.py`; do not write the request from memory.
+- **A gateway changes what is sent.** With `TASK_ORCHARD_API_BASE_URL` set, model names go to the gateway exactly as written and `TASK_ORCHARD_API_KEY` is the only credential: `ANTHROPIC_API_KEY` and other logins are ignored. Some endpoints reject the thinking setting; `TASK_ORCHARD_THINKING=omit` leaves it out.
+- **`discord_vars.sh` holds the bot's token.** It is gitignored. Do not read it, print it, `source` it in a command or copy its values anywhere.
 - **JSON has no "omitted" versus "null"** that clients agree on. That is why `update_task` unsets fields through an explicit `clear` list.
 - **A CHECK that compares with NULL passes.** Use `coalesce()` as `models.py` does.
 - **Never pass user text straight to an FTS `MATCH`.** Quote each word (SPEC 8.12).
