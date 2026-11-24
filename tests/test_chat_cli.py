@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -406,3 +407,29 @@ def test_the_transcript_keeps_the_reasoning_summary(
     records = [json.loads(line) for line in path.read_text().splitlines()]
     answer = [r for r in records if r.get("message", {}).get("role") == "assistant"][0]
     assert answer["message"]["content"][0] == thought
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_a_terminal_without_readline_still_chats(monkeypatch, tmp_path: Path) -> None:
+    """Windows has no readline module; its console edits input() lines itself."""
+    terminal_in, terminal_out = _Terminal(), _Terminal()
+    monkeypatch.setattr("sys.stdin", terminal_in)
+    monkeypatch.setattr("sys.stdout", terminal_out)
+    monkeypatch.setitem(sys.modules, "readline", None)  # import fails
+    typed = iter(["hello"])
+
+    def fake_input(prompt: str = "") -> str:
+        try:
+            return next(typed)
+        except StopIteration:
+            raise EOFError from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    read = chat_module._line_reader(terminal_in, terminal_out, io.StringIO(), tmp_path / "history")
+    assert read() == "hello\n"
+    assert read() == ""
+    assert not (tmp_path / "history").exists()

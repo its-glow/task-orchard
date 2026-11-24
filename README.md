@@ -134,7 +134,7 @@ Run them with `uv run task-orchard ...` from the repository, or `uv run --direct
 |---|---|
 | `/strategic`, `/basic` | Switch between the two model tiers for the turns that follow. The conversation carries over. A session starts on basic, or on strategic with `chat --strategic`. |
 | `/new` | Start a fresh conversation, which reads your profile again. |
-| `/exit`, `/quit` | Leave. End of input (Ctrl-D) does the same. |
+| `/exit`, `/quit` | Leave. End of input (Ctrl-D; Ctrl-Z then Enter on Windows) does the same. |
 | `/help` | List the commands. |
 
 For testing, a few more look at what the model works with, without asking it. The model never sees them.

@@ -53,15 +53,20 @@ def _line_reader(
 ) -> Callable[[], str]:
     """Return a function giving the next typed line, or "" at end of input.
 
-    At a real terminal, input() with the readline module gives line editing
-    (arrows, Ctrl-A, Ctrl-E) and history. Without it, a terminal echoes arrow
-    keys as escape codes and the cursor drifts from the text. Otherwise lines
-    are read plainly, which is what pipes and tests need.
+    At a real terminal, lines come from input(). Where the readline module
+    exists, it gives line editing (arrows, Ctrl-A, Ctrl-E) and history kept
+    between sessions; without it, a Unix terminal echoes arrow keys as escape
+    codes. Windows has no readline, but its console edits input() lines itself
+    and keeps the session's history, so only the saved history is lost there.
+    Otherwise lines are read plainly, which is what pipes and tests need.
     """
     if stdin is sys.stdin and stdout is sys.stdout and stdin.isatty() and stdout.isatty():
-        import readline
+        try:
+            import readline
+        except ImportError:
+            readline = None
 
-        if history is not None:
+        if readline is not None and history is not None:
             readline.set_history_length(HISTORY_LINES)
             try:
                 history.parent.mkdir(parents=True, exist_ok=True)
