@@ -23,7 +23,7 @@ import discord
 from discord import app_commands
 
 from task_orchard.agent import commands
-from task_orchard.agent.chat import CREDENTIALS_HELP, models_for
+from task_orchard.agent.chat import credentials_problem, models_for
 from task_orchard.agent.commands import Command
 from task_orchard.agent.continuity import Conversation
 from task_orchard.agent.model import has_credentials
@@ -177,8 +177,9 @@ def main(
     if isinstance(checked, str):
         print(checked, file=sys.stderr)
         return 1
-    if not (credentials or has_credentials)():
-        print(CREDENTIALS_HELP, file=sys.stderr)
+    problem = credentials_problem(settings, credentials or has_credentials)
+    if problem:
+        print(problem, file=sys.stderr)
         return 1
     clock = SystemClock()
     if keep_transcript and transcript is None:

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 
@@ -92,6 +93,19 @@ def _info(args: argparse.Namespace) -> int:
     print(f"timezone: {zone}")
     print(f"model, basic: {settings.model_basic}")
     print(f"model, strategic: {settings.model_strategic}")
+    if settings.api_base_url:
+        print(f"model endpoint: {settings.api_base_url}  (from TASK_ORCHARD_API_BASE_URL)")
+    elif os.environ.get("ANTHROPIC_BASE_URL"):
+        print(f"model endpoint: {os.environ['ANTHROPIC_BASE_URL']}  (from ANTHROPIC_BASE_URL)")
+    else:
+        print("model endpoint: the Claude API, directly")
+    if settings.api_key:
+        print("model key: TASK_ORCHARD_API_KEY, and no other")
+    elif settings.api_base_url:
+        print("model key: missing; set TASK_ORCHARD_API_KEY")
+    else:
+        print("model key: the SDK's own (ANTHROPIC_API_KEY, or an ant login)")
+    print(f"thinking: {settings.thinking}")
     return 0
 
 

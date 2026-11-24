@@ -130,9 +130,11 @@ def help_text(*, terminal: bool) -> str:
 
 
 def announce(session: Session, err: TextIO) -> None:
-    """[basic: claude-haiku-5-5]"""
+    """[basic: claude-haiku-5-5], with "via <host>" when a gateway is in use."""
     model = getattr(session.model, "model_id", type(session.model).__name__)
-    print(f"[{session.tier}: {model}]", file=err, flush=True)
+    via = getattr(session.model, "via", None)
+    shown = f"{model} via {via}" if via else model
+    print(f"[{session.tier}: {shown}]", file=err, flush=True)
 
 
 def _json(payload: Any) -> str:

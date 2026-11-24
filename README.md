@@ -105,9 +105,14 @@ Just describe them: "Pay rent on the 1st of every month", "Weekly report every F
 | `TASK_ORCHARD_TZ` | Your timezone as an IANA name, such as `Europe/London`. | `$TZ`, then the system timezone, else UTC. |
 | `TASK_ORCHARD_MODEL_BASIC` | The model for everyday conversation with the assistant. | `claude-haiku-5-5` |
 | `TASK_ORCHARD_MODEL_STRATEGIC` | The model for work that needs more thought, chosen with `chat --strategic` or `/strategic`. | `claude-haiku-5-5` |
+| `TASK_ORCHARD_API_BASE_URL` | Send model requests to this gateway (a LiteLLM proxy, say) instead of the Claude API. Needs `TASK_ORCHARD_API_KEY`. | none: the Claude API |
+| `TASK_ORCHARD_API_KEY` | The key for that gateway. When set, it is the only credential used; `ANTHROPIC_API_KEY` and `ant` logins are ignored. Keep it secret. | none |
+| `TASK_ORCHARD_THINKING` | `summarized` asks for summaries of the model's reasoning, for transcripts and `/last`. `omit` sends no thinking setting, for a gateway that rejects it. | `summarized` |
 | `TASK_ORCHARD_DISCORD_TOKEN` | The Discord bot's token. Keep it secret. | none |
 | `TASK_ORCHARD_DISCORD_USER_ID` | Your Discord user id: the one person the bot answers. | none |
 | `TASK_ORCHARD_DISCORD_IDLE_MINUTES` | How long a Discord conversation can be idle before your next message is checked for continuing it. | `30` |
+
+**Through a gateway.** To use a LiteLLM proxy, or another gateway that accepts Anthropic's Messages API, set `TASK_ORCHARD_API_BASE_URL` and `TASK_ORCHARD_API_KEY`, and name the models as the gateway does, for example `TASK_ORCHARD_MODEL_BASIC=anthropic.claude-haiku-5-5`. Check with `task-orchard info` before starting; the tier line in `chat` then reads `[basic: anthropic.claude-haiku-5-5 via your-gateway]`. If the gateway rejects the thinking setting, set `TASK_ORCHARD_THINKING=omit`.
 
 The database is created and migrated automatically on first start. Times in results are shown in this timezone; if none can be detected, UTC is assumed and the assistant is told to ask you to set it. `task-orchard info` prints what is in use.
 

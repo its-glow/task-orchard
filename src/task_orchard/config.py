@@ -7,6 +7,15 @@ TASK_ORCHARD_TZ   IANA timezone name for the user, e.g. "Europe/London".
 TASK_ORCHARD_MODEL_BASIC      The app's model for everyday conversation.
 TASK_ORCHARD_MODEL_STRATEGIC  The app's model for work that needs more thought.
                   Both default to claude-haiku-5-5 (SPEC 10.2, two tiers).
+                  Sent exactly as given, so a gateway's own names work.
+TASK_ORCHARD_API_BASE_URL  Reach the model through this gateway (LiteLLM, say)
+                  instead of the Claude API. Requires TASK_ORCHARD_API_KEY.
+TASK_ORCHARD_API_KEY       The key for that gateway. When set, it is the only
+                  credential sent: ANTHROPIC_API_KEY and ant logins are ignored.
+                  Without a gateway, it is used as a Claude API key.
+TASK_ORCHARD_THINKING      "summarized" (default) asks for summaries of the
+                  model's reasoning; "omit" sends no thinking setting at all,
+                  for an endpoint that rejects it.
 TASK_ORCHARD_DISCORD_TOKEN         The Discord bot's token (SPEC 10.5).
 TASK_ORCHARD_DISCORD_USER_ID       The one Discord user the bot answers.
 TASK_ORCHARD_DISCORD_IDLE_MINUTES  Idle time before a message is checked for
@@ -34,6 +43,11 @@ ENV_MODEL_STRATEGIC = "TASK_ORCHARD_MODEL_STRATEGIC"
 ENV_DISCORD_TOKEN = "TASK_ORCHARD_DISCORD_TOKEN"
 ENV_DISCORD_USER_ID = "TASK_ORCHARD_DISCORD_USER_ID"
 ENV_DISCORD_IDLE_MINUTES = "TASK_ORCHARD_DISCORD_IDLE_MINUTES"
+ENV_API_BASE_URL = "TASK_ORCHARD_API_BASE_URL"
+ENV_API_KEY = "TASK_ORCHARD_API_KEY"
+ENV_THINKING = "TASK_ORCHARD_THINKING"
+THINKING_SUMMARIZED = "summarized"
+THINKING_OMIT = "omit"
 DEFAULT_MODEL = "claude-haiku-5-5"
 
 
@@ -66,6 +80,11 @@ class Settings:
     discord_token: str | None = field(default=None, repr=False)
     discord_user_id: str | None = None
     discord_idle_minutes: str | None = None
+    # Where model requests go: None is the Claude API, directly. A key given here is
+    # a secret and is never shown; with a base URL it is the only credential used.
+    api_base_url: str | None = None
+    api_key: str | None = field(default=None, repr=False)
+    thinking: str = THINKING_SUMMARIZED
 
 
 def default_db_path(env: Mapping[str, str]) -> Path:
@@ -112,6 +131,13 @@ def detect_timezone(env: Mapping[str, str]) -> tuple[ZoneInfo, bool]:
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
+    thinking = env.get(ENV_THINKING) or THINKING_SUMMARIZED
+    if thinking not in (THINKING_SUMMARIZED, THINKING_OMIT):
+        # A setting that is wrong should fail loudly, as TASK_ORCHARD_TZ does.
+        raise ValueError(
+            f"{ENV_THINKING} must be {THINKING_SUMMARIZED!r} or {THINKING_OMIT!r}, "
+            f"not {thinking!r}."
+        )
     db = Path(env[ENV_DB]).expanduser() if env.get(ENV_DB) else default_db_path(env)
     tz, detected = detect_timezone(env)
     return Settings(
@@ -126,4 +152,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         discord_token=env.get(ENV_DISCORD_TOKEN) or None,
         discord_user_id=env.get(ENV_DISCORD_USER_ID) or None,
         discord_idle_minutes=env.get(ENV_DISCORD_IDLE_MINUTES) or None,
+        api_base_url=env.get(ENV_API_BASE_URL) or None,
+        api_key=env.get(ENV_API_KEY) or None,
+        thinking=thinking,
     )

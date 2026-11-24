@@ -25,7 +25,7 @@ from task_orchard.agent.model import (
     has_credentials,
 )
 from task_orchard.agent.trace import Trace
-from task_orchard.config import Settings
+from task_orchard.config import THINKING_OMIT, Settings
 from task_orchard.core.clock import Clock
 from task_orchard.core.service import Orchard
 
@@ -33,6 +33,12 @@ CREDENTIALS_HELP = (
     "Task Orchard's assistant needs credentials for the Claude API.\n"
     "Set ANTHROPIC_API_KEY, or log in with the ant CLI (ant auth login), then try again.\n"
     "Model calls are billed to that account."
+)
+PROXY_KEY_HELP = (
+    "TASK_ORCHARD_API_BASE_URL is set, so Task Orchard's assistant talks to that gateway, "
+    "but TASK_ORCHARD_API_KEY is not.\n"
+    "Set it to your key for the gateway, then try again. No other credentials are ever "
+    "sent to a gateway."
 )
 COMMANDS_HELP = "/help lists the commands; /exit leaves."
 HISTORY_LINES = 1000
@@ -43,9 +49,28 @@ LONG_SESSION = (
 
 def models_for(settings: Settings) -> dict[str, Model]:
     return {
-        BASIC: AnthropicModel(settings.model_basic, EFFORT[BASIC]),
-        STRATEGIC: AnthropicModel(settings.model_strategic, EFFORT[STRATEGIC]),
+        tier: AnthropicModel(
+            model_id,
+            EFFORT[tier],
+            base_url=settings.api_base_url,
+            api_key=settings.api_key,
+            thinking=settings.thinking != THINKING_OMIT,
+        )
+        for tier, model_id in ((BASIC, settings.model_basic), (STRATEGIC, settings.model_strategic))
     }
+
+
+def credentials_problem(settings: Settings, sdk_has_credentials: Callable[[], bool]) -> str | None:
+    """What to tell the user when no request could be sent for want of a credential.
+
+    A gateway takes only its own key, so a missing one is a problem even when
+    the SDK would find other credentials. Our own key needs no further check.
+    """
+    if settings.api_base_url and not settings.api_key:
+        return PROXY_KEY_HELP
+    if settings.api_key or sdk_has_credentials():
+        return None
+    return CREDENTIALS_HELP
 
 
 def _line_reader(
@@ -239,8 +264,9 @@ def main(
     `chat` keeps a transcript unless told not to: in `transcript` if given,
     otherwise in a new file under the settings' transcript directory.
     """
-    if not (credentials or has_credentials)():
-        print(CREDENTIALS_HELP, file=sys.stderr)
+    problem = credentials_problem(settings, credentials or has_credentials)
+    if problem:
+        print(problem, file=sys.stderr)
         return 1
     orchard, clock = open_orchard()
     models = models_for(settings)
